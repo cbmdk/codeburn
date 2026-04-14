@@ -25,6 +25,38 @@ function getProjectsDir(): string {
   return join(getClaudeDir(), 'projects')
 }
 
+function getDesktopSessionsDir(): string {
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')
+  if (process.platform === 'win32') return join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions')
+  return join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')
+}
+
+async function findDesktopProjectDirs(base: string): Promise<string[]> {
+  const results: string[] = []
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > 8) return
+    const entries = await readdir(dir).catch(() => [])
+    for (const entry of entries) {
+      if (entry === 'node_modules' || entry === '.git') continue
+      const full = join(dir, entry)
+      const s = await stat(full).catch(() => null)
+      if (!s?.isDirectory()) continue
+      if (entry === 'projects') {
+        const projectDirs = await readdir(full).catch(() => [])
+        for (const pd of projectDirs) {
+          const pdFull = join(full, pd)
+          const pdStat = await stat(pdFull).catch(() => null)
+          if (pdStat?.isDirectory()) results.push(pdFull)
+        }
+      } else {
+        await walk(full, depth + 1)
+      }
+    }
+  }
+  await walk(base, 0)
+  return results
+}
+
 function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
 }
@@ -269,46 +301,57 @@ async function parseSessionFile(
   return buildSessionSummary(sessionId, project, classified)
 }
 
-export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSummary[]> {
-  const projectsDir = getProjectsDir()
-  const projects: ProjectSummary[] = []
-  const seenMsgIds = new Set<string>()
+async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange): Promise<ProjectSummary[]> {
+  const projectMap = new Map<string, SessionSummary[]>()
 
-  let projectDirs: string[]
-  try {
-    projectDirs = await readdir(projectsDir)
-  } catch {
-    return []
-  }
-
-  for (const dirName of projectDirs) {
-    const dirPath = join(projectsDir, dirName)
-    const dirStat = await stat(dirPath).catch(() => null)
-    if (!dirStat?.isDirectory()) continue
-
+  for (const { path: dirPath, name: dirName } of dirs) {
     const files = await readdir(dirPath).catch(() => [])
     const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'))
 
-    const sessions: SessionSummary[] = []
     for (const file of jsonlFiles) {
       const session = await parseSessionFile(join(dirPath, file), dirName, seenMsgIds, dateRange)
       if (session && session.apiCalls > 0) {
-        sessions.push(session)
+        const existing = projectMap.get(dirName) ?? []
+        existing.push(session)
+        projectMap.set(dirName, existing)
       }
-    }
-
-    if (sessions.length > 0) {
-      const totalCost = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
-      const totalCalls = sessions.reduce((s, sess) => s + sess.apiCalls, 0)
-      projects.push({
-        project: dirName,
-        projectPath: unsanitizePath(dirName),
-        sessions,
-        totalCostUSD: totalCost,
-        totalApiCalls: totalCalls,
-      })
     }
   }
 
+  const projects: ProjectSummary[] = []
+  for (const [dirName, sessions] of projectMap) {
+    projects.push({
+      project: dirName,
+      projectPath: unsanitizePath(dirName),
+      sessions,
+      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
+    })
+  }
+
+  return projects
+}
+
+export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSummary[]> {
+  const seenMsgIds = new Set<string>()
+  const allDirs: Array<{ path: string; name: string }> = []
+
+  const projectsDir = getProjectsDir()
+  try {
+    const entries = await readdir(projectsDir)
+    for (const dirName of entries) {
+      const dirPath = join(projectsDir, dirName)
+      const dirStat = await stat(dirPath).catch(() => null)
+      if (dirStat?.isDirectory()) allDirs.push({ path: dirPath, name: dirName })
+    }
+  } catch {}
+
+  const desktopDirs = await findDesktopProjectDirs(getDesktopSessionsDir())
+  for (const dirPath of desktopDirs) {
+    const dirName = basename(dirPath)
+    allDirs.push({ path: dirPath, name: dirName })
+  }
+
+  const projects = await scanProjectDirs(allDirs, seenMsgIds, dateRange)
   return projects.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
