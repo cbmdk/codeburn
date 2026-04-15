@@ -29,6 +29,8 @@ type BubbleRow = {
   model: string | null
   created_at: string | null
   conversation_id: string | null
+  user_text: string | null
+  code_blocks: string | null
 }
 
 function getCursorDbPath(): string {
@@ -39,6 +41,25 @@ function getCursorDbPath(): string {
     return join(homedir(), 'AppData', 'Roaming', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
   }
   return join(homedir(), '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
+}
+
+type CodeBlock = { languageId?: string }
+
+function extractLanguages(codeBlocksJson: string | null): string[] {
+  if (!codeBlocksJson) return []
+  try {
+    const blocks = JSON.parse(codeBlocksJson) as CodeBlock[]
+    if (!Array.isArray(blocks)) return []
+    const langs = new Set<string>()
+    for (const block of blocks) {
+      if (block.languageId && block.languageId !== 'plaintext') {
+        langs.add(block.languageId)
+      }
+    }
+    return [...langs]
+  } catch {
+    return []
+  }
 }
 
 function resolveModel(raw: string | null): string {
@@ -57,7 +78,9 @@ const BUBBLE_QUERY_BASE = `
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
     json_extract(value, '$.modelInfo.modelName') as model,
     json_extract(value, '$.createdAt') as created_at,
-    json_extract(value, '$.conversationId') as conversation_id
+    json_extract(value, '$.conversationId') as conversation_id,
+    substr(json_extract(value, '$.text'), 1, 500) as user_text,
+    json_extract(value, '$.codeBlocks') as code_blocks
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
     AND json_extract(value, '$.tokenCount.inputTokens') > 0
@@ -112,6 +135,9 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
       const timestamp = createdAt || ''
+      const userText = row.user_text ?? ''
+
+      const languages = extractLanguages(row.code_blocks)
 
       results.push({
         provider: 'cursor',
@@ -124,11 +150,11 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
         reasoningTokens: 0,
         webSearchRequests: 0,
         costUSD,
-        tools: [],
+        tools: languages,
         timestamp,
         speed: 'standard',
         deduplicationKey: dedupKey,
-        userMessage: '',
+        userMessage: userText,
         sessionId: conversationId,
       })
     } catch {
@@ -189,7 +215,33 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return rawTool
+      const langNames: Record<string, string> = {
+        javascript: 'JavaScript',
+        typescript: 'TypeScript',
+        python: 'Python',
+        rust: 'Rust',
+        go: 'Go',
+        java: 'Java',
+        cpp: 'C++',
+        c: 'C',
+        csharp: 'C#',
+        ruby: 'Ruby',
+        php: 'PHP',
+        swift: 'Swift',
+        kotlin: 'Kotlin',
+        html: 'HTML',
+        css: 'CSS',
+        scss: 'SCSS',
+        json: 'JSON',
+        yaml: 'YAML',
+        markdown: 'Markdown',
+        sql: 'SQL',
+        shell: 'Shell',
+        bash: 'Bash',
+        dockerfile: 'Dockerfile',
+        toml: 'TOML',
+      }
+      return langNames[rawTool] ?? rawTool
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

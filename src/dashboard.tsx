@@ -304,7 +304,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
   )
 }
 
-function ToolBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+function ToolBreakdown({ projects, pw, bw, title }: { projects: ProjectSummary[]; pw: number; bw: number; title?: string }) {
   const toolTotals: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -318,7 +318,7 @@ function ToolBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   const nw = Math.max(6, pw - bw - 15)
 
   return (
-    <Panel title="Core Tools" color={PANEL_COLORS.tools} width={pw}>
+    <Panel title={title ?? 'Core Tools'} color={PANEL_COLORS.tools} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(7)}</Text>
       {sorted.slice(0, 10).map(([tool, calls]) => (
         <Text key={tool} wrap="truncate-end">
@@ -462,8 +462,9 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns }: { projects: ProjectSummary[]; period: Period; columns?: number }) {
+function DashboardContent({ projects, period, columns, activeProvider }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
+  const isCursor = activeProvider === 'cursor'
 
   if (projects.length === 0) {
     return (
@@ -474,13 +475,14 @@ function DashboardContent({ projects, period, columns }: { projects: ProjectSumm
   }
 
   const pw = wide ? halfWidth : dashWidth
+  const days = period === 'month' || period === '30days' ? 31 : period === '120days' ? 120 : 14
 
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
 
       <Row wide={wide} width={dashWidth}>
-        <DailyActivity projects={projects} days={period === 'month' || period === '30days' ? 31 : 14} pw={pw} bw={barWidth} />
+        <DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} />
         <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
       </Row>
 
@@ -489,12 +491,17 @@ function DashboardContent({ projects, period, columns }: { projects: ProjectSumm
         <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />
       </Row>
 
-      <Row wide={wide} width={dashWidth}>
-        <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
-        <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
-
-      <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+      {isCursor ? (
+        <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" />
+      ) : (
+        <>
+          <Row wide={wide} width={dashWidth}>
+            <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
+            <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
+          </Row>
+          <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+        </>
+      )}
     </Box>
   )
 }
@@ -607,7 +614,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      <DashboardContent projects={projects} period={period} columns={columns} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
       <StatusBar width={dashWidth} showProvider={multipleProviders} />
     </Box>
   )
