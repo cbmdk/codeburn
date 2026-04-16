@@ -1,6 +1,6 @@
 import chalk from 'chalk'
-import { readdir, readFile, stat } from 'fs/promises'
-import { existsSync, readFileSync } from 'fs'
+import { readdir, readFile } from 'fs/promises'
+import { existsSync, readFileSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
@@ -9,22 +9,99 @@ import type { DateRange, ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 
+// ============================================================================
+// Display constants
+// ============================================================================
+
 const ORANGE = '#FF8C42'
 const DIM = '#666666'
 const GOLD = '#FFD700'
 const CYAN = '#5BF5E0'
 const GREEN = '#5BF5A0'
+const RED = '#F55B5B'
+
+// ============================================================================
+// Token estimation constants
+// ============================================================================
+
+const AVG_TOKENS_PER_READ = 600
+const TOKENS_PER_MCP_TOOL = 400
+const TOOLS_PER_MCP_SERVER = 5
+const TOKENS_PER_AGENT_DEF = 80
+const TOKENS_PER_SKILL_DEF = 80
+const TOKENS_PER_COMMAND_DEF = 60
+const CLAUDEMD_TOKENS_PER_LINE = 13
+const BASH_TOKENS_PER_CHAR = 0.25
+const ESTIMATED_READS_PER_MISSING_IGNORE = 10
+
+// ============================================================================
+// Detector thresholds
+// ============================================================================
+
+const CLAUDEMD_HEALTHY_LINES = 200
+const CLAUDEMD_HIGH_THRESHOLD_LINES = 400
+const MIN_JUNK_READS_TO_FLAG = 3
+const JUNK_READS_HIGH_THRESHOLD = 20
+const JUNK_READS_MEDIUM_THRESHOLD = 5
+const MIN_DUPLICATE_READS_TO_FLAG = 5
+const DUPLICATE_READS_HIGH_THRESHOLD = 30
+const DUPLICATE_READS_MEDIUM_THRESHOLD = 10
+const MIN_EDITS_FOR_RATIO = 10
+const HEALTHY_READ_EDIT_RATIO = 4
+const LOW_RATIO_HIGH_THRESHOLD = 2
+const LOW_RATIO_MEDIUM_THRESHOLD = 3
+const MIN_API_CALLS_FOR_CACHE = 10
+const CACHE_EXCESS_HIGH_THRESHOLD = 15000
+const MISSING_IGNORE_HIGH_THRESHOLD = 3
+const UNUSED_MCP_HIGH_THRESHOLD = 3
+const GHOST_AGENTS_HIGH_THRESHOLD = 5
+const GHOST_AGENTS_MEDIUM_THRESHOLD = 2
+const GHOST_SKILLS_HIGH_THRESHOLD = 10
+const GHOST_SKILLS_MEDIUM_THRESHOLD = 5
+const GHOST_COMMANDS_MEDIUM_THRESHOLD = 10
+const MCP_NEW_CONFIG_GRACE_MS = 24 * 60 * 60 * 1000
+const BASH_DEFAULT_LIMIT = 30000
+const BASH_RECOMMENDED_LIMIT = 15000
+
+// ============================================================================
+// Scoring constants
+// ============================================================================
+
+const HEALTH_WEIGHT_HIGH = 15
+const HEALTH_WEIGHT_MEDIUM = 7
+const HEALTH_WEIGHT_LOW = 3
+const HEALTH_MAX_PENALTY = 80
+const GRADE_A_MIN = 90
+const GRADE_B_MIN = 75
+const GRADE_C_MIN = 55
+const GRADE_D_MIN = 30
+const URGENCY_IMPACT_WEIGHT = 0.7
+const URGENCY_TOKEN_WEIGHT = 0.3
+const URGENCY_TOKEN_NORMALIZE = 500_000
+
+// ============================================================================
+// File system constants
+// ============================================================================
+
+const MAX_IMPORT_DEPTH = 5
+const IMPORT_PATTERN = /^@(\.\.?\/[^\s]+|\/[^\s]+)/gm
+const COMMAND_PATTERN = /<command-name>([^<]+)<\/command-name>|(?:^|\s)\/([a-zA-Z][\w-]*)/gm
 
 const JUNK_DIRS = [
   'node_modules', '.git', 'dist', 'build', '__pycache__', '.next',
   '.nuxt', '.output', 'coverage', '.cache', '.tsbuildinfo',
   '.venv', 'venv', '.svn', '.hg',
 ]
-const JUNK_PATTERN = new RegExp(`/(${JUNK_DIRS.join('|')})/`)
+const JUNK_PATTERN = new RegExp(`/(?:${JUNK_DIRS.join('|')})/`)
 
-const AVG_TOKENS_PER_READ = 1500
-const TOKENS_PER_MCP_TOOL = 400
-const CLAUDEMD_HEALTHY_LINES = 200
+const SHELL_PROFILES = ['.zshrc', '.bashrc', '.bash_profile', '.profile']
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type Impact = 'high' | 'medium' | 'low'
+export type HealthGrade = 'A' | 'B' | 'C' | 'D' | 'F'
 
 export type WasteAction =
   | { type: 'paste'; label: string; text: string }
@@ -34,12 +111,10 @@ export type WasteAction =
 export type WasteFinding = {
   title: string
   explanation: string
-  impact: 'high' | 'medium' | 'low'
+  impact: Impact
   tokensSaved: number
   fix: WasteAction
 }
-
-export type HealthGrade = 'A' | 'B' | 'C' | 'D' | 'F'
 
 export type OptimizeResult = {
   findings: WasteFinding[]
@@ -48,14 +123,14 @@ export type OptimizeResult = {
   healthGrade: HealthGrade
 }
 
-type ToolCall = {
+export type ToolCall = {
   name: string
   input: Record<string, unknown>
   sessionId: string
   project: string
 }
 
-type ApiCallMeta = {
+export type ApiCallMeta = {
   cacheCreationTokens: number
   version: string
 }
@@ -68,7 +143,9 @@ type ScanData = {
   userMessages: string[]
 }
 
-const IMPACT_ORDER: Record<string, number> = { high: 3, medium: 2, low: 1 }
+// ============================================================================
+// JSONL scanner
+// ============================================================================
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   const files = await readdir(dirPath).catch(() => [])
@@ -92,7 +169,14 @@ type ScanFileResult = {
   userMessages: string[]
 }
 
-async function scanJsonlFile(
+function inRange(timestamp: string | undefined, range: DateRange | undefined): boolean {
+  if (!range) return true
+  if (!timestamp) return false
+  const ts = new Date(timestamp)
+  return ts >= range.start && ts <= range.end
+}
+
+export async function scanJsonlFile(
   filePath: string,
   project: string,
   dateRange: DateRange | undefined,
@@ -108,16 +192,23 @@ async function scanJsonlFile(
   const versions: string[] = []
   const userMessages: string[] = []
   const sessionId = basename(filePath, '.jsonl')
+  let lastVersion = ''
 
   for (const line of content.split('\n')) {
     if (!line.trim()) continue
     let entry: Record<string, unknown>
     try { entry = JSON.parse(line) } catch { continue }
 
-    if (entry.cwd && typeof entry.cwd === 'string') cwds.push(entry.cwd)
-    if (entry.version && typeof entry.version === 'string') versions.push(entry.version)
+    if (entry.version && typeof entry.version === 'string') lastVersion = entry.version
+
+    const ts = typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+    const withinRange = inRange(ts, dateRange)
+
+    if (entry.cwd && typeof entry.cwd === 'string' && withinRange) cwds.push(entry.cwd)
+    if (entry.version && typeof entry.version === 'string' && withinRange) versions.push(entry.version)
 
     if (entry.type === 'user') {
+      if (!withinRange) continue
       const msg = entry.message as Record<string, unknown> | undefined
       const msgContent = msg?.content
       if (typeof msgContent === 'string') {
@@ -133,18 +224,13 @@ async function scanJsonlFile(
     }
 
     if (entry.type !== 'assistant') continue
-
-    if (dateRange && typeof entry.timestamp === 'string') {
-      const ts = new Date(entry.timestamp)
-      if (ts < dateRange.start || ts > dateRange.end) continue
-    }
+    if (!withinRange) continue
 
     const msg = entry.message as Record<string, unknown> | undefined
     const usage = msg?.usage as Record<string, unknown> | undefined
     if (usage) {
       const cacheCreate = (usage.cache_creation_input_tokens as number) ?? 0
-      const ver = versions[versions.length - 1] ?? ''
-      if (cacheCreate > 0) apiCalls.push({ cacheCreationTokens: cacheCreate, version: ver })
+      if (cacheCreate > 0) apiCalls.push({ cacheCreationTokens: cacheCreate, version: lastVersion })
     }
 
     const blocks = msg?.content
@@ -187,17 +273,67 @@ async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
   return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, versions: allVersions, userMessages: allUserMessages }
 }
 
-function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
-  const readCalls = calls.filter(c => c.name === 'Read' || c.name === 'FileReadTool')
+// ============================================================================
+// Shared helpers
+// ============================================================================
 
+function readJsonFile(path: string): Record<string, unknown> | null {
+  try { return JSON.parse(readFileSync(path, 'utf-8')) } catch { return null }
+}
+
+function shortHomePath(absPath: string): string {
+  const home = homedir()
+  return absPath.startsWith(home) ? '~' + absPath.slice(home.length) : absPath
+}
+
+function isReadTool(name: string): boolean {
+  return name === 'Read' || name === 'FileReadTool'
+}
+
+type McpConfigEntry = { normalized: string; original: string; mtime: number }
+
+export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpConfigEntry> {
+  const servers = new Map<string, McpConfigEntry>()
+  const configPaths = [
+    join(homedir(), '.claude', 'settings.json'),
+    join(homedir(), '.claude', 'settings.local.json'),
+  ]
+  for (const cwd of projectCwds) {
+    configPaths.push(join(cwd, '.mcp.json'))
+    configPaths.push(join(cwd, '.claude', 'settings.json'))
+    configPaths.push(join(cwd, '.claude', 'settings.local.json'))
+  }
+
+  for (const p of configPaths) {
+    if (!existsSync(p)) continue
+    const config = readJsonFile(p)
+    if (!config) continue
+    let mtime = 0
+    try { mtime = statSync(p).mtimeMs } catch {}
+    const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
+    for (const name of Object.keys(serversObj)) {
+      const normalized = name.replace(/:/g, '_')
+      const existing = servers.get(normalized)
+      if (!existing || existing.mtime < mtime) {
+        servers.set(normalized, { normalized, original: name, mtime })
+      }
+    }
+  }
+  return servers
+}
+
+// ============================================================================
+// Detectors
+// ============================================================================
+
+export function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
   const dirCounts = new Map<string, number>()
   let totalJunkReads = 0
 
-  for (const call of readCalls) {
+  for (const call of calls) {
+    if (!isReadTool(call.name)) continue
     const filePath = call.input.file_path as string | undefined
-    if (!filePath) continue
-    if (!JUNK_PATTERN.test(filePath)) continue
-
+    if (!filePath || !JUNK_PATTERN.test(filePath)) continue
     totalJunkReads++
     for (const dir of JUNK_DIRS) {
       if (filePath.includes(`/${dir}/`)) {
@@ -207,22 +343,21 @@ function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
     }
   }
 
-  if (totalJunkReads < 3) return null
+  if (totalJunkReads < MIN_JUNK_READS_TO_FLAG) return null
 
   const sorted = [...dirCounts.entries()].sort((a, b) => b[1] - a[1])
   const dirList = sorted.slice(0, 3).map(([d, n]) => `${d}/ (${n}x)`).join(', ')
   const tokensSaved = totalJunkReads * AVG_TOKENS_PER_READ
 
   const detected = sorted.map(([d]) => d)
-  const extras = ['node_modules', '.git', 'dist', '__pycache__']
-    .filter(d => !dirCounts.has(d))
-    .slice(0, Math.max(0, 6 - detected.length))
+  const commonDefaults = ['node_modules', '.git', 'dist', '__pycache__']
+  const extras = commonDefaults.filter(d => !dirCounts.has(d)).slice(0, Math.max(0, 6 - detected.length))
   const ignoreContent = [...detected, ...extras].join('\n')
 
   return {
-    title: 'STOP READING JUNK DIRECTORIES',
-    explanation: `Claude read into ${dirList} -- ${totalJunkReads} times total. Each read loads ~${AVG_TOKENS_PER_READ.toLocaleString()} tokens of irrelevant content into context. A .claudeignore blocks this.`,
-    impact: totalJunkReads > 20 ? 'high' : totalJunkReads > 5 ? 'medium' : 'low',
+    title: 'Claude is reading build/dependency folders',
+    explanation: `Claude read into ${dirList} (${totalJunkReads} reads). These are generated or dependency directories, not your code. A .claudeignore tells Claude to skip them.`,
+    impact: totalJunkReads > JUNK_READS_HIGH_THRESHOLD ? 'high' : totalJunkReads > JUNK_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'file-content',
@@ -233,15 +368,13 @@ function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
   }
 }
 
-function detectDuplicateReads(calls: ToolCall[]): WasteFinding | null {
-  const readCalls = calls.filter(c => c.name === 'Read' || c.name === 'FileReadTool')
-
+export function detectDuplicateReads(calls: ToolCall[]): WasteFinding | null {
   const sessionFiles = new Map<string, Map<string, number>>()
 
-  for (const call of readCalls) {
+  for (const call of calls) {
+    if (!isReadTool(call.name)) continue
     const filePath = call.input.file_path as string | undefined
     if (!filePath || JUNK_PATTERN.test(filePath)) continue
-
     const key = `${call.project}:${call.sessionId}`
     if (!sessionFiles.has(key)) sessionFiles.set(key, new Map())
     const fm = sessionFiles.get(key)!
@@ -261,64 +394,36 @@ function detectDuplicateReads(calls: ToolCall[]): WasteFinding | null {
     }
   }
 
-  if (totalDuplicates < 5) return null
+  if (totalDuplicates < MIN_DUPLICATE_READS_TO_FLAG) return null
 
   const worst = [...fileDupes.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
-    .map(([name, n]) => `${name} (+${n})`)
+    .map(([name, n]) => `${name} (${n + 1}x)`)
     .join(', ')
 
   const tokensSaved = totalDuplicates * AVG_TOKENS_PER_READ
 
   return {
-    title: 'CUT DUPLICATE FILE READS',
-    explanation: `Claude re-read the same file ${totalDuplicates} times across sessions. Top offenders: ${worst}. Each re-read loads ~${AVG_TOKENS_PER_READ.toLocaleString()} tokens that are already in context.`,
-    impact: totalDuplicates > 30 ? 'high' : totalDuplicates > 10 ? 'medium' : 'low',
+    title: 'Claude is re-reading the same files',
+    explanation: `${totalDuplicates} redundant re-reads across sessions. Top repeats: ${worst}. Each re-read loads the same content into context again.`,
+    impact: totalDuplicates > DUPLICATE_READS_HIGH_THRESHOLD ? 'high' : totalDuplicates > DUPLICATE_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Give Claude exact locations so it reads once:',
-      text: 'Look at src/auth.ts lines 45-80, the validateToken function.',
+      label: 'Point Claude at exact locations in your prompt, for example:',
+      text: 'In <file> lines <start>-<end>, look at the <function> function.',
     },
   }
 }
 
-function readJsonFile(path: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(readFileSync(path, 'utf-8'))
-  } catch { return null }
-}
-
-function detectUnusedMcp(
+export function detectUnusedMcp(
   calls: ToolCall[],
   projects: ProjectSummary[],
   projectCwds: Set<string>,
 ): WasteFinding | null {
-  const configuredServers = new Map<string, string>()
-
-  const configPaths = [
-    join(homedir(), '.claude', 'settings.json'),
-    join(homedir(), '.claude', 'settings.local.json'),
-  ]
-  for (const cwd of projectCwds) {
-    configPaths.push(join(cwd, '.mcp.json'))
-    configPaths.push(join(cwd, '.claude', 'settings.json'))
-    configPaths.push(join(cwd, '.claude', 'settings.local.json'))
-  }
-
-  for (const p of configPaths) {
-    if (!existsSync(p)) continue
-    const config = readJsonFile(p)
-    if (!config) continue
-    const servers = (config.mcpServers ?? {}) as Record<string, unknown>
-    for (const name of Object.keys(servers)) {
-      const normalized = name.replace(/:/g, '_')
-      configuredServers.set(normalized, name)
-    }
-  }
-
-  if (configuredServers.size === 0) return null
+  const configured = loadMcpConfigs(projectCwds)
+  if (configured.size === 0) return null
 
   const calledServers = new Set<string>()
   for (const call of calls) {
@@ -328,28 +433,28 @@ function detectUnusedMcp(
   }
   for (const p of projects) {
     for (const s of p.sessions) {
-      for (const server of Object.keys(s.mcpBreakdown)) {
-        calledServers.add(server)
-      }
+      for (const server of Object.keys(s.mcpBreakdown)) calledServers.add(server)
     }
   }
 
+  const now = Date.now()
   const unused: string[] = []
-  for (const [normalized, original] of configuredServers) {
-    if (!calledServers.has(normalized)) unused.push(original)
+  for (const entry of configured.values()) {
+    if (calledServers.has(entry.normalized)) continue
+    if (entry.mtime > 0 && now - entry.mtime < MCP_NEW_CONFIG_GRACE_MS) continue
+    unused.push(entry.original)
   }
 
   if (unused.length === 0) return null
 
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
-  const estimatedTools = 5
-  const schemaTokens = unused.length * estimatedTools * TOKENS_PER_MCP_TOOL
-  const tokensSaved = schemaTokens * totalSessions
+  const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
+  const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
 
   return {
-    title: 'REMOVE UNUSED MCP SERVERS',
-    explanation: `${unused.length} MCP server${unused.length > 1 ? 's' : ''} configured but never called: ${unused.join(', ')}. Each loads ~${(estimatedTools * TOKENS_PER_MCP_TOOL).toLocaleString()} tokens of schema into every session (${totalSessions.toLocaleString()} sessions in this period).`,
-    impact: unused.length >= 3 ? 'high' : 'medium',
+    title: `${unused.length} MCP server${unused.length > 1 ? 's' : ''} configured but never used`,
+    explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
+    impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
     fix: {
       type: 'command',
@@ -359,18 +464,15 @@ function detectUnusedMcp(
   }
 }
 
-function detectMissingClaudeignore(projectCwds: Set<string>): WasteFinding | null {
+export function detectMissingClaudeignore(projectCwds: Set<string>): WasteFinding | null {
   const missing: string[] = []
-  const hasJunkDir: string[] = []
 
   for (const cwd of projectCwds) {
-    if (existsSync(join(cwd, '.claudeignore'))) continue
     if (!existsSync(cwd)) continue
-
+    if (existsSync(join(cwd, '.claudeignore'))) continue
     for (const dir of JUNK_DIRS) {
       if (existsSync(join(cwd, dir))) {
         missing.push(cwd)
-        hasJunkDir.push(dir)
         break
       }
     }
@@ -378,20 +480,17 @@ function detectMissingClaudeignore(projectCwds: Set<string>): WasteFinding | nul
 
   if (missing.length === 0) return null
 
-  const shortPaths = missing.map(p => {
-    const home = homedir()
-    return p.startsWith(home) ? '~' + p.slice(home.length) : p
-  })
+  const shortPaths = missing.map(shortHomePath)
   const display = shortPaths.length <= 3
     ? shortPaths.join(', ')
     : `${shortPaths.slice(0, 2).join(', ')} + ${shortPaths.length - 2} more`
 
-  const tokensSaved = missing.length * 10 * AVG_TOKENS_PER_READ
+  const tokensSaved = missing.length * ESTIMATED_READS_PER_MISSING_IGNORE * AVG_TOKENS_PER_READ
 
   return {
-    title: 'ADD .claudeignore FILES',
-    explanation: `${missing.length} project${missing.length > 1 ? 's' : ''} ha${missing.length > 1 ? 've' : 's'} junk directories (node_modules, .git, etc.) but no .claudeignore: ${display}. Without it, Claude may read/search these directories.`,
-    impact: missing.length >= 3 ? 'high' : 'medium',
+    title: `Add .claudeignore to ${missing.length} project${missing.length > 1 ? 's' : ''}`,
+    explanation: `${missing.length} project${missing.length > 1 ? 's have' : ' has'} build/dependency folders (node_modules, .git, etc.) but no .claudeignore: ${display}. Without it, Claude can wander into them.`,
+    impact: missing.length >= MISSING_IGNORE_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
     fix: {
       type: 'file-content',
@@ -402,24 +501,20 @@ function detectMissingClaudeignore(projectCwds: Set<string>): WasteFinding | nul
   }
 }
 
-const MAX_IMPORT_DEPTH = 5
-const IMPORT_PATTERN = /^@([^\s]+)/gm
-
 function expandImports(filePath: string, seen: Set<string>, depth: number): { totalLines: number; importedFiles: number } {
   if (depth > MAX_IMPORT_DEPTH || seen.has(filePath)) return { totalLines: 0, importedFiles: 0 }
   seen.add(filePath)
   let content: string
   try { content = readFileSync(filePath, 'utf-8') } catch { return { totalLines: 0, importedFiles: 0 } }
 
-  const lines = content.split('\n').length
-  let totalLines = lines
+  let totalLines = content.split('\n').length
   let importedFiles = 0
   const dir = join(filePath, '..')
 
-  const matches = content.matchAll(IMPORT_PATTERN)
-  for (const match of matches) {
+  IMPORT_PATTERN.lastIndex = 0
+  for (const match of content.matchAll(IMPORT_PATTERN)) {
     const rawPath = match[1]
-    if (!rawPath || rawPath.startsWith('http') || rawPath.includes('@')) continue
+    if (!rawPath) continue
     const resolved = rawPath.startsWith('/') ? rawPath : join(dir, rawPath)
     if (!existsSync(resolved)) continue
     const nested = expandImports(resolved, seen, depth + 1)
@@ -430,22 +525,17 @@ function expandImports(filePath: string, seen: Set<string>, depth: number): { to
   return { totalLines, importedFiles }
 }
 
-function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
-  const bloated: { path: string; lines: number; expandedLines: number; imports: number }[] = []
+export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
+  const bloated: { path: string; expandedLines: number; imports: number }[] = []
 
   for (const cwd of projectCwds) {
     for (const name of ['CLAUDE.md', '.claude/CLAUDE.md']) {
       const fullPath = join(cwd, name)
       if (!existsSync(fullPath)) continue
-      try {
-        const content = readFileSync(fullPath, 'utf-8')
-        const lineCount = content.split('\n').length
-        const { totalLines, importedFiles } = expandImports(fullPath, new Set(), 0)
-        if (totalLines > CLAUDEMD_HEALTHY_LINES) {
-          const short = cwd.startsWith(homedir()) ? '~' + cwd.slice(homedir().length) : cwd
-          bloated.push({ path: `${short}/${name}`, lines: lineCount, expandedLines: totalLines, imports: importedFiles })
-        }
-      } catch { continue }
+      const { totalLines, importedFiles } = expandImports(fullPath, new Set(), 0)
+      if (totalLines > CLAUDEMD_HEALTHY_LINES) {
+        bloated.push({ path: `${shortHomePath(cwd)}/${name}`, expandedLines: totalLines, imports: importedFiles })
+      }
     }
   }
 
@@ -454,23 +544,22 @@ function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
   const sorted = bloated.sort((a, b) => b.expandedLines - a.expandedLines)
   const worst = sorted[0]
   const totalExtraLines = sorted.reduce((s, b) => s + (b.expandedLines - CLAUDEMD_HEALTHY_LINES), 0)
-  const tokensPerLine = 25
-  const tokensSaved = totalExtraLines * tokensPerLine
+  const tokensSaved = totalExtraLines * CLAUDEMD_TOKENS_PER_LINE
 
   const list = sorted.slice(0, 3).map(b => {
-    const importNote = b.imports > 0 ? ` + ${b.imports} imported` : ''
+    const importNote = b.imports > 0 ? ` with ${b.imports} @-import${b.imports > 1 ? 's' : ''}` : ''
     return `${b.path} (${b.expandedLines} lines${importNote})`
   }).join(', ')
 
   return {
-    title: 'TRIM BLOATED CLAUDE.md',
-    explanation: `${list}. Every line loads into every API call as context, including @-imports. Beyond ${CLAUDEMD_HEALTHY_LINES} lines, the extra ~${totalExtraLines} lines cost ~${formatTokens(tokensSaved)} tokens per call.`,
-    impact: worst.expandedLines > 400 ? 'high' : 'medium',
+    title: `Your CLAUDE.md is too long`,
+    explanation: `${list}. CLAUDE.md plus all @-imported files load into every API call. Trimming below ${CLAUDEMD_HEALTHY_LINES} lines saves ~${formatTokens(tokensSaved)} tokens per call.`,
+    impact: worst.expandedLines > CLAUDEMD_HIGH_THRESHOLD_LINES ? 'high' : 'medium',
     tokensSaved,
     fix: {
       type: 'paste',
       label: 'Ask Claude to trim it:',
-      text: 'Review CLAUDE.md and all @-imported files. Cut total expanded content to under 200 lines. Remove anything Claude can figure out from the code itself: file paths, architecture, imports. Keep only: rules, gotchas, and non-obvious conventions.',
+      text: `Review CLAUDE.md and all @-imported files. Cut total expanded content to under ${CLAUDEMD_HEALTHY_LINES} lines. Remove anything Claude can figure out from the code itself. Keep only rules, gotchas, and non-obvious conventions.`,
     },
   }
 }
@@ -478,31 +567,27 @@ function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
 const READ_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
 const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit'])
 
-function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
+export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   let reads = 0
   let edits = 0
-
   for (const call of calls) {
     if (READ_TOOL_NAMES.has(call.name)) reads++
     else if (EDIT_TOOL_NAMES.has(call.name)) edits++
   }
 
-  if (edits < 10) return null
-
+  if (edits < MIN_EDITS_FOR_RATIO) return null
   const ratio = reads / edits
-  if (ratio >= 4) return null
+  if (ratio >= HEALTHY_READ_EDIT_RATIO) return null
 
-  const ratioStr = ratio.toFixed(1)
-  const impact: 'high' | 'medium' | 'low' = ratio < 2 ? 'high' : ratio < 3 ? 'medium' : 'low'
-
-  const extraReadsNeeded = Math.round(edits * 4) - reads
+  const impact: Impact = ratio < LOW_RATIO_HIGH_THRESHOLD ? 'high' : ratio < LOW_RATIO_MEDIUM_THRESHOLD ? 'medium' : 'low'
+  const extraReadsNeeded = Math.max(Math.round(edits * HEALTHY_READ_EDIT_RATIO) - reads, 0)
   const tokensSaved = extraReadsNeeded * AVG_TOKENS_PER_READ
 
   return {
-    title: 'CLAUDE IS EDITING WITHOUT READING',
-    explanation: `Read:Edit ratio is ${ratioStr}:1 (${reads} reads, ${edits} edits). Healthy is 4:1+. A low ratio means Claude edits files without fully understanding the codebase first -- leading to more retries and wasted tokens.`,
+    title: 'Claude edits more than it reads',
+    explanation: `Claude made ${reads} reads and ${edits} edits (ratio ${ratio.toFixed(1)}:1). A healthy ratio is ${HEALTHY_READ_EDIT_RATIO}+ reads per edit. Editing without reading leads to retries and wasted tokens.`,
     impact,
-    tokensSaved: Math.max(tokensSaved, 0),
+    tokensSaved,
     fix: {
       type: 'paste',
       label: 'Add to your CLAUDE.md:',
@@ -511,57 +596,62 @@ function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   }
 }
 
-function detectCacheBloat(apiCalls: ApiCallMeta[]): WasteFinding | null {
-  if (apiCalls.length < 10) return null
+function computeBudgetAwareCacheBaseline(projects: ProjectSummary[]): number {
+  const sessions = projects.flatMap(p => p.sessions)
+  if (sessions.length === 0) return 50_000
+  const cacheWrites = sessions.map(s => s.totalCacheWriteTokens).filter(n => n > 0)
+  if (cacheWrites.length < MIN_API_CALLS_FOR_CACHE) return 50_000
+  const sorted = cacheWrites.sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length * 0.25)] || 50_000
+}
+
+export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSummary[]): WasteFinding | null {
+  if (apiCalls.length < MIN_API_CALLS_FOR_CACHE) return null
 
   const sorted = apiCalls.map(c => c.cacheCreationTokens).sort((a, b) => a - b)
   const median = sorted[Math.floor(sorted.length / 2)]
+  const baseline = computeBudgetAwareCacheBaseline(projects)
+  const bloatThreshold = baseline * 1.4
 
-  if (median < 55000) return null
+  if (median < bloatThreshold) return null
 
   const versionCounts = new Map<string, { total: number; count: number }>()
   for (const call of apiCalls) {
     if (!call.version) continue
-    const v = call.version
-    const entry = versionCounts.get(v) ?? { total: 0, count: 0 }
+    const entry = versionCounts.get(call.version) ?? { total: 0, count: 0 }
     entry.total += call.cacheCreationTokens
     entry.count++
-    versionCounts.set(v, entry)
+    versionCounts.set(call.version, entry)
   }
-
   const versionAvgs = [...versionCounts.entries()]
     .filter(([, d]) => d.count >= 5)
-    .map(([v, d]) => ({ version: v, avg: Math.round(d.total / d.count), count: d.count }))
+    .map(([v, d]) => ({ version: v, avg: Math.round(d.total / d.count) }))
     .sort((a, b) => b.avg - a.avg)
 
-  const excess = median - 50000
+  const excess = median - baseline
   const tokensSaved = excess * apiCalls.length
 
   let versionNote = ''
   if (versionAvgs.length >= 2) {
-    const highest = versionAvgs[0]
-    const lowest = versionAvgs[versionAvgs.length - 1]
-    if (highest.avg - lowest.avg > 10000) {
-      versionNote = ` Version ${highest.version} averages ${formatTokens(highest.avg)} vs ${lowest.version} at ${formatTokens(lowest.avg)}.`
+    const [high, ...rest] = versionAvgs
+    const low = rest[rest.length - 1]
+    if (high.avg - low.avg > 10_000) {
+      versionNote = ` Version ${high.version} averages ${formatTokens(high.avg)} vs ${low.version} at ${formatTokens(low.avg)}.`
     }
   }
 
   return {
-    title: 'HIGH CACHE CREATION OVERHEAD',
-    explanation: `Median cache_creation per call is ${formatTokens(median)} tokens (baseline ~50K). The extra ~${formatTokens(excess)} tokens per call may be server-injected content invisible to you.${versionNote} See anthropics/claude-code#46917.`,
-    impact: excess > 15000 ? 'high' : 'medium',
+    title: 'Session warmup is unusually large',
+    explanation: `Median cache_creation per call is ${formatTokens(median)} tokens, about ${formatTokens(excess)} above your baseline of ${formatTokens(baseline)}.${versionNote}`,
+    impact: excess > CACHE_EXCESS_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Spoof older User-Agent to reduce overhead:',
+      label: 'Check for recent Claude Code updates or heavy MCP/skill additions. As a workaround (not officially supported):',
       text: 'export ANTHROPIC_CUSTOM_HEADERS=\'User-Agent: claude-cli/2.1.98 (external, sdk-cli)\'',
     },
   }
 }
-
-const TOKENS_PER_AGENT_DEF = 80
-const TOKENS_PER_COMMAND_DEF = 60
-const SKILL_FRONTMATTER_TOKENS = 80
 
 async function listMarkdownFiles(dir: string): Promise<string[]> {
   if (!existsSync(dir)) return []
@@ -583,9 +673,8 @@ async function listSkillDirs(dir: string): Promise<string[]> {
   } catch { return [] }
 }
 
-async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding | null> {
-  const agentDir = join(homedir(), '.claude', 'agents')
-  const defined = await listMarkdownFiles(agentDir)
+export async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding | null> {
+  const defined = await listMarkdownFiles(join(homedir(), '.claude', 'agents'))
   if (defined.length === 0) return null
 
   const invoked = new Set<string>()
@@ -602,9 +691,9 @@ async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding | null
   const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
 
   return {
-    title: 'REMOVE UNUSED CUSTOM AGENTS',
-    explanation: `${ghosts.length} agent definition${ghosts.length > 1 ? 's' : ''} in ~/.claude/agents/ never invoked: ${list}. Each agent adds ~${TOKENS_PER_AGENT_DEF} tokens of description to the Task tool schema on every session.`,
-    impact: ghosts.length >= 5 ? 'high' : ghosts.length >= 2 ? 'medium' : 'low',
+    title: `${ghosts.length} custom agent${ghosts.length > 1 ? 's' : ''} you never use`,
+    explanation: `Defined in ~/.claude/agents/ but never invoked in this period: ${list}. Each adds ~${TOKENS_PER_AGENT_DEF} tokens to the Task tool schema on every session.`,
+    impact: ghosts.length >= GHOST_AGENTS_HIGH_THRESHOLD ? 'high' : ghosts.length >= GHOST_AGENTS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'command',
@@ -614,9 +703,8 @@ async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding | null
   }
 }
 
-async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding | null> {
-  const skillDir = join(homedir(), '.claude', 'skills')
-  const defined = await listSkillDirs(skillDir)
+export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding | null> {
+  const defined = await listSkillDirs(join(homedir(), '.claude', 'skills'))
   if (defined.length === 0) return null
 
   const invoked = new Set<string>()
@@ -627,15 +715,15 @@ async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding | null
   }
 
   const ghosts = defined.filter(name => !invoked.has(name))
-  if (ghosts.length === 0 || ghosts.length < 3) return null
+  if (ghosts.length === 0) return null
 
-  const tokensSaved = ghosts.length * SKILL_FRONTMATTER_TOKENS
+  const tokensSaved = ghosts.length * TOKENS_PER_SKILL_DEF
   const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
 
   return {
-    title: 'REMOVE UNUSED SKILLS',
-    explanation: `${ghosts.length} skill${ghosts.length > 1 ? 's' : ''} in ~/.claude/skills/ never invoked: ${list}. Each skill's frontmatter adds ~${SKILL_FRONTMATTER_TOKENS} tokens to the Skill tool invocation index on every session.`,
-    impact: ghosts.length >= 10 ? 'high' : ghosts.length >= 5 ? 'medium' : 'low',
+    title: `${ghosts.length} skill${ghosts.length > 1 ? 's' : ''} you never use`,
+    explanation: `In ~/.claude/skills/ but not invoked this period: ${list}. Each adds ~${TOKENS_PER_SKILL_DEF} tokens of metadata to every session.`,
+    impact: ghosts.length >= GHOST_SKILLS_HIGH_THRESHOLD ? 'high' : ghosts.length >= GHOST_SKILLS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'command',
@@ -645,17 +733,15 @@ async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding | null
   }
 }
 
-async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding | null> {
-  const cmdDir = join(homedir(), '.claude', 'commands')
-  const defined = await listMarkdownFiles(cmdDir)
+export async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding | null> {
+  const defined = await listMarkdownFiles(join(homedir(), '.claude', 'commands'))
   if (defined.length === 0) return null
 
   const invoked = new Set<string>()
-  const cmdPattern = /<command-name>([^<]+)<\/command-name>|\/(\w+[-\w]*)/g
   for (const msg of userMessages) {
-    const matches = msg.matchAll(cmdPattern)
-    for (const m of matches) {
-      const name = (m[1] || m[2] || '').replace(/^\//, '')
+    COMMAND_PATTERN.lastIndex = 0
+    for (const m of msg.matchAll(COMMAND_PATTERN)) {
+      const name = (m[1] || m[2] || '').trim()
       if (name) invoked.add(name)
     }
   }
@@ -667,9 +753,9 @@ async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding
   const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
 
   return {
-    title: 'REMOVE UNUSED SLASH COMMANDS',
-    explanation: `${ghosts.length} slash command${ghosts.length > 1 ? 's' : ''} in ~/.claude/commands/ never used: ${list}. Each adds ~${TOKENS_PER_COMMAND_DEF} tokens of definition per session.`,
-    impact: ghosts.length >= 10 ? 'medium' : 'low',
+    title: `${ghosts.length} slash command${ghosts.length > 1 ? 's' : ''} you never use`,
+    explanation: `In ~/.claude/commands/ but not referenced this period: ${list}. Each adds ~${TOKENS_PER_COMMAND_DEF} tokens of definition per session.`,
+    impact: ghosts.length >= GHOST_COMMANDS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'command',
@@ -679,35 +765,136 @@ async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding
   }
 }
 
-function detectBashBloat(): WasteFinding | null {
-  const current = process.env['BASH_MAX_OUTPUT_LENGTH']
-  if (current && parseInt(current, 10) <= 15000) return null
+function readShellProfileLimit(): number | null {
+  for (const profile of SHELL_PROFILES) {
+    const path = join(homedir(), profile)
+    if (!existsSync(path)) continue
+    try {
+      const content = readFileSync(path, 'utf-8')
+      const match = content.match(/^\s*export\s+BASH_MAX_OUTPUT_LENGTH\s*=\s*['"]?(\d+)['"]?/m)
+      if (match) return parseInt(match[1], 10)
+    } catch { continue }
+  }
+  return null
+}
 
-  const limit = current ? parseInt(current, 10) : 30000
-  const saved = limit - 15000
-  const tokensSaved = Math.round(saved * 0.25)
+export function detectBashBloat(): WasteFinding | null {
+  const profileLimit = readShellProfileLimit()
+  const envLimit = process.env['BASH_MAX_OUTPUT_LENGTH']
+  const configured = profileLimit ?? (envLimit ? parseInt(envLimit, 10) : null)
+
+  if (configured !== null && configured <= BASH_RECOMMENDED_LIMIT) return null
+
+  const limit = configured ?? BASH_DEFAULT_LIMIT
+  const extraChars = limit - BASH_RECOMMENDED_LIMIT
+  const tokensSaved = Math.round(extraChars * BASH_TOKENS_PER_CHAR)
 
   return {
-    title: 'CAP BASH OUTPUT LENGTH',
-    explanation: `Bash output limit is ${(limit / 1000).toFixed(0)}K characters (${current ? 'configured' : 'default'}). Most useful output is under 15K. The extra ${(saved / 1000).toFixed(0)}K chars waste ~${formatTokens(tokensSaved)} tokens per bash call.`,
+    title: 'Shrink bash output limit',
+    explanation: `Your bash output cap is ${(limit / 1000).toFixed(0)}K chars (${configured ? 'configured' : 'default'}). Most output fits in ${(BASH_RECOMMENDED_LIMIT / 1000).toFixed(0)}K. The extra ~${formatTokens(tokensSaved)} tokens per bash call is trailing noise.`,
     impact: 'medium',
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Add to your shell profile (~/.zshrc or ~/.bashrc):',
-      text: 'export BASH_MAX_OUTPUT_LENGTH=15000',
+      label: 'Add to ~/.zshrc or ~/.bashrc:',
+      text: `export BASH_MAX_OUTPUT_LENGTH=${BASH_RECOMMENDED_LIMIT}`,
     },
   }
 }
+
+// ============================================================================
+// Scoring
+// ============================================================================
+
+const HEALTH_WEIGHTS: Record<Impact, number> = {
+  high: HEALTH_WEIGHT_HIGH,
+  medium: HEALTH_WEIGHT_MEDIUM,
+  low: HEALTH_WEIGHT_LOW,
+}
+
+export function computeHealth(findings: WasteFinding[]): { score: number; grade: HealthGrade } {
+  if (findings.length === 0) return { score: 100, grade: 'A' }
+  let penalty = 0
+  for (const f of findings) penalty += HEALTH_WEIGHTS[f.impact] ?? 0
+  const score = Math.max(0, 100 - Math.min(HEALTH_MAX_PENALTY, penalty))
+  const grade: HealthGrade =
+    score >= GRADE_A_MIN ? 'A' :
+    score >= GRADE_B_MIN ? 'B' :
+    score >= GRADE_C_MIN ? 'C' :
+    score >= GRADE_D_MIN ? 'D' : 'F'
+  return { score, grade }
+}
+
+const URGENCY_WEIGHTS: Record<Impact, number> = { high: 1, medium: 0.5, low: 0.2 }
+
+function urgencyScore(f: WasteFinding): number {
+  const normalizedTokens = Math.min(1, f.tokensSaved / URGENCY_TOKEN_NORMALIZE)
+  return URGENCY_WEIGHTS[f.impact] * URGENCY_IMPACT_WEIGHT + normalizedTokens * URGENCY_TOKEN_WEIGHT
+}
+
+// ============================================================================
+// Cost estimation
+// ============================================================================
+
+const INPUT_COST_RATIO = 0.7
+const DEFAULT_COST_PER_TOKEN = 0
 
 function computeInputCostRate(projects: ProjectSummary[]): number {
   const sessions = projects.flatMap(p => p.sessions)
   const totalCost = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
   const totalTokens = sessions.reduce((s, sess) =>
     s + sess.totalInputTokens + sess.totalCacheReadTokens + sess.totalCacheWriteTokens, 0)
-  if (totalTokens === 0 || totalCost === 0) return 1 / 1_000_000
-  return (totalCost * 0.7) / totalTokens
+  if (totalTokens === 0 || totalCost === 0) return DEFAULT_COST_PER_TOKEN
+  return (totalCost * INPUT_COST_RATIO) / totalTokens
 }
+
+// ============================================================================
+// Main entry points
+// ============================================================================
+
+export async function scanAndDetect(
+  projects: ProjectSummary[],
+  dateRange?: DateRange,
+): Promise<OptimizeResult> {
+  const costRate = computeInputCostRate(projects)
+  const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
+
+  const findings: WasteFinding[] = []
+  const syncDetectors: Array<() => WasteFinding | null> = [
+    () => detectCacheBloat(apiCalls, projects),
+    () => detectLowReadEditRatio(toolCalls),
+    () => detectJunkReads(toolCalls),
+    () => detectDuplicateReads(toolCalls),
+    () => detectUnusedMcp(toolCalls, projects, projectCwds),
+    () => detectMissingClaudeignore(projectCwds),
+    () => detectBloatedClaudeMd(projectCwds),
+    () => detectBashBloat(),
+  ]
+  for (const detect of syncDetectors) {
+    const finding = detect()
+    if (finding) findings.push(finding)
+  }
+
+  const ghostResults = await Promise.all([
+    detectGhostAgents(toolCalls),
+    detectGhostSkills(toolCalls),
+    detectGhostCommands(userMessages),
+  ])
+  for (const f of ghostResults) if (f) findings.push(f)
+
+  findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
+  const { score, grade } = computeHealth(findings)
+  return { findings, costRate, healthScore: score, healthGrade: grade }
+}
+
+// ============================================================================
+// CLI rendering
+// ============================================================================
+
+const PANEL_WIDTH = 62
+const SEP = '\u2500'
+const IMPACT_COLORS: Record<Impact, string> = { high: RED, medium: ORANGE, low: DIM }
+const GRADE_COLORS: Record<HealthGrade, string> = { A: GREEN, B: GREEN, C: GOLD, D: ORANGE, F: RED }
 
 function wrap(text: string, width: number, indent: string): string {
   const words = text.split(' ')
@@ -725,24 +912,21 @@ function wrap(text: string, width: number, indent: string): string {
   return lines.join('\n')
 }
 
-const IMPACT_COLORS: Record<string, string> = { high: '#F55B5B', medium: ORANGE, low: DIM }
-
-function renderFinding(n: number, f: WasteFinding, costRate: number, W: number): string[] {
+function renderFinding(n: number, f: WasteFinding, costRate: number): string[] {
   const lines: string[] = []
-  const sep = '\u2500'
   const costSaved = f.tokensSaved * costRate
   const impactLabel = f.impact.charAt(0).toUpperCase() + f.impact.slice(1)
   const savings = `~${formatTokens(f.tokensSaved)} tokens (~${formatCost(costSaved)})`
-  const titlePad = W - f.title.length - impactLabel.length - 8
-  const pad = titlePad > 0 ? ' ' + sep.repeat(titlePad) + ' ' : '  '
+  const titlePad = PANEL_WIDTH - f.title.length - impactLabel.length - 8
+  const pad = titlePad > 0 ? ' ' + SEP.repeat(titlePad) + ' ' : '  '
 
-  lines.push(chalk.hex(DIM)(`  ${sep}${sep}${sep} `) +
+  lines.push(chalk.hex(DIM)(`  ${SEP}${SEP}${SEP} `) +
     chalk.bold(`${n}. ${f.title}`) +
     chalk.hex(DIM)(pad) +
-    chalk.hex(IMPACT_COLORS[f.impact] ?? DIM)(impactLabel) +
-    chalk.hex(DIM)(` ${sep}${sep}${sep}`))
+    chalk.hex(IMPACT_COLORS[f.impact])(impactLabel) +
+    chalk.hex(DIM)(` ${SEP}${SEP}${SEP}`))
   lines.push('')
-  lines.push(wrap(f.explanation, W - 4, '  '))
+  lines.push(wrap(f.explanation, PANEL_WIDTH - 4, '  '))
   lines.push('')
   lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`))
   lines.push('')
@@ -750,24 +934,17 @@ function renderFinding(n: number, f: WasteFinding, costRate: number, W: number):
   const a = f.fix
   if (a.type === 'file-content') {
     lines.push(chalk.hex(DIM)(`  ${a.label}`))
-    for (const line of a.content.split('\n')) {
-      lines.push(chalk.hex(CYAN)(`    ${line}`))
-    }
+    for (const line of a.content.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
   } else if (a.type === 'command') {
     lines.push(chalk.hex(DIM)(`  ${a.label}`))
-    for (const line of a.text.split('\n')) {
-      lines.push(chalk.hex(CYAN)(`    ${line}`))
-    }
+    for (const line of a.text.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
   } else {
     lines.push(chalk.hex(DIM)(`  ${a.label}`))
     lines.push(chalk.hex(CYAN)(`    ${a.text}`))
   }
-
   lines.push('')
   return lines
 }
-
-const GRADE_COLORS: Record<HealthGrade, string> = { A: GREEN, B: GREEN, C: GOLD, D: ORANGE, F: '#F55B5B' }
 
 function renderOptimize(
   findings: WasteFinding[],
@@ -780,23 +957,21 @@ function renderOptimize(
   healthGrade: HealthGrade,
 ): string {
   const lines: string[] = []
-  const W = 62
-  const sep = '\u2500'
-
   lines.push('')
-  lines.push(`  ${chalk.bold.hex(ORANGE)('CodeBurn Optimize')}${chalk.dim('  ' + periodLabel)}`)
-  lines.push(chalk.hex(DIM)('  ' + sep.repeat(W)))
+  lines.push(`  ${chalk.bold.hex(ORANGE)('CodeBurn -- config health')}${chalk.dim('  ' + periodLabel)}`)
+  lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
 
+  const issueSuffix = findings.length > 0 ? `, ${findings.length} issue${findings.length > 1 ? 's' : ''}` : ''
   lines.push('  ' + [
     `${sessionCount} sessions`,
     `${callCount.toLocaleString()} calls`,
     chalk.hex(GOLD)(formatCost(periodCost)),
-    `Setup: ${chalk.bold.hex(GRADE_COLORS[healthGrade])(healthGrade)} ${chalk.dim(`(${healthScore}/100)`)}`,
+    `Health: ${chalk.bold.hex(GRADE_COLORS[healthGrade])(healthGrade)}${chalk.dim(` (${healthScore}/100${issueSuffix})`)}`,
   ].join(chalk.hex(DIM)('   ')))
   lines.push('')
 
   if (findings.length === 0) {
-    lines.push(chalk.hex(GREEN)('  No waste detected -- your setup looks clean.'))
+    lines.push(chalk.hex(GREEN)('  Nothing to fix. Your setup is lean.'))
     lines.push('')
     return lines.join('\n')
   }
@@ -806,77 +981,18 @@ function renderOptimize(
   const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
   const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
 
-  lines.push(chalk.hex(GREEN)(`  Potential savings: ~${formatTokens(totalTokens)} tokens (~${formatCost(totalCost)}, ~${pct}% of spend)`))
+  const costText = costRate > 0 ? ` (~${formatCost(totalCost)}, ~${pct}% of spend)` : ''
+  lines.push(chalk.hex(GREEN)(`  Potential savings: ~${formatTokens(totalTokens)} tokens${costText}`))
   lines.push('')
 
-  const sorted = findings
-
-  for (let i = 0; i < sorted.length; i++) {
-    lines.push(...renderFinding(i + 1, sorted[i], costRate, W))
+  for (let i = 0; i < findings.length; i++) {
+    lines.push(...renderFinding(i + 1, findings[i], costRate))
   }
 
-  lines.push(chalk.hex(DIM)('  ' + sep.repeat(W)))
-  lines.push(chalk.dim('  Token estimates are approximate. Actual savings vary by file size and model.'))
+  lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
+  lines.push(chalk.dim('  Estimates only.'))
   lines.push('')
-
   return lines.join('\n')
-}
-
-function computeHealth(findings: WasteFinding[]): { score: number; grade: HealthGrade } {
-  if (findings.length === 0) return { score: 100, grade: 'A' }
-
-  const impactWeight: Record<string, number> = { high: 15, medium: 7, low: 3 }
-  let penalty = 0
-  for (const f of findings) penalty += impactWeight[f.impact] ?? 0
-
-  const score = Math.max(0, 100 - Math.min(80, penalty))
-  const grade: HealthGrade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 55 ? 'C' : score >= 30 ? 'D' : 'F'
-  return { score, grade }
-}
-
-function urgencyScore(f: WasteFinding): number {
-  const impactWeight: Record<string, number> = { high: 1, medium: 0.5, low: 0.2 }
-  const normalizedTokens = Math.min(1, f.tokensSaved / 500_000)
-  return (impactWeight[f.impact] ?? 0) * 0.7 + normalizedTokens * 0.3
-}
-
-export async function scanAndDetect(
-  projects: ProjectSummary[],
-  dateRange?: DateRange,
-): Promise<OptimizeResult> {
-  const costRate = computeInputCostRate(projects)
-  const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
-
-  const findings: WasteFinding[] = []
-  const syncDetectors = [
-    () => detectCacheBloat(apiCalls),
-    () => detectLowReadEditRatio(toolCalls),
-    () => detectJunkReads(toolCalls),
-    () => detectDuplicateReads(toolCalls),
-    () => detectUnusedMcp(toolCalls, projects, projectCwds),
-    () => detectMissingClaudeignore(projectCwds),
-    () => detectBloatedClaudeMd(projectCwds),
-    () => detectBashBloat(),
-  ]
-  for (const detect of syncDetectors) {
-    const finding = detect()
-    if (finding) findings.push(finding)
-  }
-
-  const asyncDetectors = [
-    () => detectGhostAgents(toolCalls),
-    () => detectGhostSkills(toolCalls),
-    () => detectGhostCommands(userMessages),
-  ]
-  for (const detect of asyncDetectors) {
-    const finding = await detect()
-    if (finding) findings.push(finding)
-  }
-
-  findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
-
-  const { score, grade } = computeHealth(findings)
-  return { findings, costRate, healthScore: score, healthGrade: grade }
 }
 
 export async function runOptimize(
@@ -889,7 +1005,7 @@ export async function runOptimize(
     return
   }
 
-  process.stderr.write(chalk.dim('  Scanning sessions for waste patterns...\n'))
+  process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
 
   const { findings, costRate, healthScore, healthGrade } = await scanAndDetect(projects, dateRange)
   const sessions = projects.flatMap(p => p.sessions)
