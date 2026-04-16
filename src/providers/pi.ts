@@ -28,6 +28,9 @@ const toolNameMap: Record<string, string> = {
   patch: 'Patch',
 }
 
+// Pre-sorted by key length descending so longer/more-specific keys match first
+const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
+
 type PiEntry = {
   type: string
   id?: string
@@ -200,8 +203,7 @@ export function createPiProvider(sessionsDir?: string): Provider {
     displayName: 'Pi',
 
     modelDisplayName(model: string): string {
-      const entries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
-      for (const [key, name] of entries) {
+      for (const [key, name] of modelDisplayEntries) {
         if (model.startsWith(key)) return name
       }
       return model

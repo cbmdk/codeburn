@@ -58,6 +58,21 @@ describe('extractBashCommands', () => {
   it('handles single-quoted separators', () => {
     expect(extractBashCommands("echo 'hello && world'")).toEqual(['echo'])
   })
+
+  it('skips leading env var assignments', () => {
+    expect(extractBashCommands('NODE_ENV=prod npm test')).toEqual(['npm'])
+    expect(extractBashCommands('FOO=bar BAZ=qux ls -la')).toEqual(['ls'])
+  })
+
+  it('skips standalone true/false', () => {
+    expect(extractBashCommands('true && git status')).toEqual(['git'])
+    expect(extractBashCommands('false || echo done')).toEqual(['echo'])
+    expect(extractBashCommands('true')).toEqual([])
+  })
+
+  it('handles env vars combined with chained commands', () => {
+    expect(extractBashCommands('NODE_ENV=test npm test && git push')).toEqual(['npm', 'git'])
+  })
 })
 
 describe('BASH_TOOLS', () => {
