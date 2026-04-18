@@ -1,4 +1,4 @@
-import { readdir } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
 import { readSessionFile } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
@@ -266,6 +266,15 @@ async function parseSessionFile(
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
 ): Promise<SessionSummary | null> {
+  // Skip files whose mtime is older than the range start. A session file
+  // can only contain entries up to its last-modified time; if that predates
+  // the requested range, nothing in this file can match.
+  if (dateRange) {
+    try {
+      const s = await stat(filePath)
+      if (s.mtimeMs < dateRange.start.getTime()) return null
+    } catch { /* fall through to normal read; missing stat shouldn't break parsing */ }
+  }
   const content = await readSessionFile(filePath)
   if (content === null) return null
   const lines = content.split('\n').filter(l => l.trim())
@@ -388,6 +397,12 @@ async function parseProviderSources(
   const sessionMap = new Map<string, { project: string; turns: ClassifiedTurn[] }>()
 
   for (const source of sources) {
+    if (dateRange) {
+      try {
+        const s = await stat(source.path)
+        if (s.mtimeMs < dateRange.start.getTime()) continue
+      } catch { /* fall through; treat unknown stat as "may contain data" */ }
+    }
     const parser = provider.createSessionParser(
       { path: source.path, project: source.project, provider: providerName },
       seenKeys,

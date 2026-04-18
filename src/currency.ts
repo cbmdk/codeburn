@@ -12,6 +12,17 @@ type CurrencyState = {
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const FRANKFURTER_URL = 'https://api.frankfurter.app/latest?from=USD&to='
+// Defensive bounds on any fetched FX rate. Outside this band the rate is either a parser bug
+// or a tampered Frankfurter response, and we refuse to multiply it into displayed costs.
+const MIN_VALID_FX_RATE = 0.0001
+const MAX_VALID_FX_RATE = 1_000_000
+
+function isValidRate(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= MIN_VALID_FX_RATE
+    && value <= MAX_VALID_FX_RATE
+}
 
 let active: CurrencyState = { code: 'USD', rate: 1, symbol: '$' }
 
@@ -54,18 +65,22 @@ function getRateCachePath(): string {
 async function fetchRate(code: string): Promise<number> {
   const response = await fetch(`${FRANKFURTER_URL}${code}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const data = await response.json() as { rates: Record<string, number> }
-  const rate = data.rates[code]
-  if (!rate) throw new Error(`No rate returned for ${code}`)
+  const data = await response.json() as { rates?: Record<string, unknown> }
+  const rate = data.rates?.[code]
+  if (!isValidRate(rate)) throw new Error(`Invalid rate returned for ${code}`)
   return rate
 }
 
 async function loadCachedRate(code: string): Promise<number | null> {
   try {
     const raw = await readFile(getRateCachePath(), 'utf-8')
-    const cached = JSON.parse(raw) as { timestamp: number; code: string; rate: number }
-    if (cached.code !== code) return null
+    const cached = JSON.parse(raw) as Partial<{ timestamp: number; code: string; rate: number }>
+    // Validate every field -- a tampered cache file could set rate to a string, null, or
+    // Infinity and break downstream math silently.
+    if (typeof cached.code !== 'string' || cached.code !== code) return null
+    if (typeof cached.timestamp !== 'number' || !Number.isFinite(cached.timestamp)) return null
     if (Date.now() - cached.timestamp > CACHE_TTL_MS) return null
+    if (!isValidRate(cached.rate)) return null
     return cached.rate
   } catch {
     return null

@@ -120,8 +120,15 @@ describe('exportCsv', () => {
     ]
 
     const outputPath = join(tmpDir, 'report.csv')
-    await exportCsv(periods, outputPath)
-    const content = await readFile(outputPath, 'utf-8')
+    const folder = await exportCsv(periods, outputPath)
+    // exportCsv now writes a folder of clean one-table-per-file CSVs, so the formula-prefix
+    // guard is scattered across files. Concatenate them for the assertion surface.
+    const [projects, models, shell] = await Promise.all([
+      readFile(join(folder, 'projects.csv'), 'utf-8'),
+      readFile(join(folder, 'models.csv'), 'utf-8'),
+      readFile(join(folder, 'shell-commands.csv'), 'utf-8'),
+    ])
+    const content = projects + models + shell
 
     expect(content).toContain("\"'=cmd,calc\"")
     expect(content).toContain("'+danger-model")

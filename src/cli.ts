@@ -1,13 +1,17 @@
 import { Command } from 'commander'
+import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing } from './models.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
-import { installMenubar, renderMenubarFormat, type PeriodData, type ProviderCost, uninstallMenubar } from './menubar.js'
+import { type PeriodData, type ProviderCost } from './menubar-json.js'
+import { buildMenubarPayload } from './menubar-json.js'
+import { addNewDays, getDaysInRange, loadDailyCache, saveDailyCache, withDailyCacheLock } from './daily-cache.js'
+import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
-import { runOptimize } from './optimize.js'
+import { runOptimize, scanAndDetect } from './optimize.js'
 import { getAllProviders } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { createRequire } from 'node:module'
@@ -15,6 +19,13 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const BACKFILL_DAYS = 365
+
+function toDateString(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
 
 function getDateRange(period: string): { range: DateRange; label: string } {
   const now = new Date()
@@ -43,7 +54,11 @@ function getDateRange(period: string): { range: DateRange; label: string } {
       return { range: { start, end }, label: 'Last 30 Days' }
     }
     case 'all': {
-      return { range: { start: new Date(0), end }, label: 'All Time' }
+      // Cap "All Time" to the last 6 months. Older data is rarely actionable for a cost
+      // tracker and keeps the parse path bounded so providers like Codex/Cursor with sparse
+      // data still load in seconds.
+      const start = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
+      return { range: { start, end }, label: 'Last 6 months' }
     }
     default: {
       const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
@@ -98,8 +113,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
-  const allInput = totalInput + totalCacheRead + totalCacheWrite
-  const cacheHitPercent = allInput > 0 ? Math.round((totalCacheRead / allInput) * 1000) / 10 : 0
+  // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
+  // counts tokens being stored, not served, so it doesn't belong in the denominator.
+  const cacheHitDenom = totalInput + totalCacheRead
+  const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
 
   const dailyMap: Record<string, { cost: number; calls: number }> = {}
   for (const sess of sessions) {
@@ -262,6 +279,7 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
     label,
     cost: projects.reduce((s, p) => s + p.totalCostUSD, 0),
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
+    sessions: projects.reduce((s, p) => s + p.sessions.length, 0),
     inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
     categories: Object.entries(catTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
@@ -275,27 +293,148 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
 program
   .command('status')
   .description('Compact status output (today + week + month)')
-  .option('--format <format>', 'Output format: terminal, menubar, json', 'terminal')
+  .option('--format <format>', 'Output format: terminal, menubar-json, json', 'terminal')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
+  .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     await loadPricing()
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
-    if (opts.format === 'menubar') {
-      const todayRange = getDateRange('today').range
-      const todayData = buildPeriodData('Today', fp(await parseAllSessions(todayRange, pf)))
-      const weekData = buildPeriodData('7 Days', fp(await parseAllSessions(getDateRange('week').range, pf)))
-      const thirtyDayData = buildPeriodData('30 Days', fp(await parseAllSessions(getDateRange('30days').range, pf)))
-      const monthData = buildPeriodData('Month', fp(await parseAllSessions(getDateRange('month').range, pf)))
-      const todayProviders: ProviderCost[] = []
-      for (const p of await getAllProviders()) {
-        const data = fp(await parseAllSessions(todayRange, p.name))
-        const cost = data.reduce((s, proj) => s + proj.totalCostUSD, 0)
-        if (cost > 0) todayProviders.push({ name: p.displayName, cost })
+    if (opts.format === 'menubar-json') {
+      const periodInfo = getDateRange(opts.period)
+      const now = new Date()
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const yesterdayEnd = new Date(todayStart.getTime() - 1)
+      const yesterdayStr = toDateString(new Date(todayStart.getTime() - MS_PER_DAY))
+      const isAllProviders = pf === 'all'
+
+      // The daily cache is provider-agnostic: always backfill it from .all so subsequent
+      // provider-filtered reads can derive per-provider cost+calls from DailyEntry.providers.
+      const cache = await withDailyCacheLock(async () => {
+        let c = await loadDailyCache()
+        const gapStart = c.lastComputedDate
+          ? new Date(new Date(`${c.lastComputedDate}T00:00:00.000Z`).getTime() + MS_PER_DAY)
+          : new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY)
+
+        if (gapStart.getTime() <= yesterdayEnd.getTime()) {
+          const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
+          const gapProjects = filterProjectsByName(await parseAllSessions(gapRange, 'all'), opts.project, opts.exclude)
+          const gapDays = aggregateProjectsIntoDays(gapProjects)
+          c = addNewDays(c, gapDays, yesterdayStr)
+          await saveDailyCache(c)
+        }
+        return c
+      })
+
+      // CURRENT PERIOD DATA
+      // - .all provider: assemble from cache + today (fast)
+      // - specific provider: parse the period range with provider filter (correct, but slower)
+      let currentData: PeriodData
+      let scanProjects: ProjectSummary[]
+      let scanRange: DateRange
+
+      if (isAllProviders) {
+        const todayRange: DateRange = { start: todayStart, end: now }
+        const todayProjects = fp(await parseAllSessions(todayRange, 'all'))
+        const todayDays = aggregateProjectsIntoDays(todayProjects)
+        const rangeStartStr = toDateString(periodInfo.range.start)
+        const rangeEndStr = toDateString(periodInfo.range.end)
+        const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr)
+        const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
+        const allDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
+        currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
+        scanProjects = todayProjects
+        scanRange = todayRange
+      } else {
+        const projects = fp(await parseAllSessions(periodInfo.range, pf))
+        currentData = buildPeriodData(periodInfo.label, projects)
+        scanProjects = projects
+        scanRange = periodInfo.range
       }
-      console.log(renderMenubarFormat(todayData, weekData, thirtyDayData, monthData, todayProviders))
+
+      // PROVIDERS
+      // For .all: enumerate every provider with cost across the period (from cache) + installed-but-zero.
+      // For specific: just this single provider with its scoped cost.
+      const allProviders = await getAllProviders()
+      const displayNameByName = new Map(allProviders.map(p => [p.name, p.displayName]))
+      const providers: ProviderCost[] = []
+      if (isAllProviders) {
+        const todayRangeForProviders: DateRange = { start: todayStart, end: now }
+        const todayDaysForProviders = aggregateProjectsIntoDays(fp(await parseAllSessions(todayRangeForProviders, 'all')))
+        const rangeStartStr = toDateString(periodInfo.range.start)
+        const allDaysForProviders = [
+          ...getDaysInRange(cache, rangeStartStr, yesterdayStr),
+          ...todayDaysForProviders.filter(d => d.date >= rangeStartStr),
+        ]
+        const providerTotals: Record<string, number> = {}
+        for (const d of allDaysForProviders) {
+          for (const [name, p] of Object.entries(d.providers)) {
+            providerTotals[name] = (providerTotals[name] ?? 0) + p.cost
+          }
+        }
+        for (const [name, cost] of Object.entries(providerTotals)) {
+          providers.push({ name: displayNameByName.get(name) ?? name, cost })
+        }
+        for (const p of allProviders) {
+          if (providers.some(pc => pc.name === p.displayName)) continue
+          const sources = await p.discoverSessions()
+          if (sources.length > 0) providers.push({ name: p.displayName, cost: 0 })
+        }
+      } else {
+        const display = displayNameByName.get(pf) ?? pf
+        providers.push({ name: display, cost: currentData.cost })
+      }
+
+      // DAILY HISTORY (last 365 days)
+      // Cache stores per-provider cost+calls per day in DailyEntry.providers, so we can derive
+      // a provider-filtered history without re-parsing. Tokens aren't broken down per provider
+      // in the cache, so the filtered view shows zero tokens (heatmap/trend still works on cost).
+      const historyStartStr = toDateString(new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY))
+      const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
+      const allTodayDaysForHistory = aggregateProjectsIntoDays(fp(await parseAllSessions({ start: todayStart, end: now }, 'all')))
+      const fullHistory = [...allCacheDays, ...allTodayDaysForHistory]
+      const dailyHistory = fullHistory.map(d => {
+        if (isAllProviders) {
+          const topModels = Object.entries(d.models)
+            .filter(([name]) => name !== '<synthetic>')
+            .sort(([, a], [, b]) => b.cost - a.cost)
+            .slice(0, 5)
+            .map(([name, m]) => ({
+              name,
+              cost: m.cost,
+              calls: m.calls,
+              inputTokens: m.inputTokens,
+              outputTokens: m.outputTokens,
+            }))
+          return {
+            date: d.date,
+            cost: d.cost,
+            calls: d.calls,
+            inputTokens: d.inputTokens,
+            outputTokens: d.outputTokens,
+            cacheReadTokens: d.cacheReadTokens,
+            cacheWriteTokens: d.cacheWriteTokens,
+            topModels,
+          }
+        }
+        const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
+        return {
+          date: d.date,
+          cost: prov.cost,
+          calls: prov.calls,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          topModels: [],
+        }
+      })
+
+      const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
+      console.log(JSON.stringify(buildMenubarPayload(currentData, providers, optimize, dailyHistory)))
       return
     }
 
@@ -374,29 +513,37 @@ program
     const outputPath = opts.output ?? `${defaultName}.${opts.format}`
 
     let savedPath: string
-    if (opts.format === 'json') {
-      savedPath = await exportJson(periods, outputPath)
-    } else {
-      savedPath = await exportCsv(periods, outputPath)
+    try {
+      if (opts.format === 'json') {
+        savedPath = await exportJson(periods, outputPath)
+      } else {
+        savedPath = await exportCsv(periods, outputPath)
+      }
+    } catch (err) {
+      // Protection guards in export.ts (symlink refusal, non-codeburn folder refusal, etc.)
+      // throw with a user-readable message. Print just the message, not the stack, so the CLI
+      // doesn't spray its internals at the user.
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Export failed: ${message}\n`)
+      process.exit(1)
     }
 
     console.log(`\n  Exported (Today + 7 Days + 30 Days) to: ${savedPath}\n`)
   })
 
 program
-  .command('install-menubar')
-  .description('Install macOS menu bar plugin (SwiftBar/xbar)')
-  .action(async () => {
-    const result = await installMenubar()
-    console.log(result)
-  })
-
-program
-  .command('uninstall-menubar')
-  .description('Remove macOS menu bar plugin')
-  .action(async () => {
-    const result = await uninstallMenubar()
-    console.log(result)
+  .command('menubar')
+  .description('Install and launch the macOS menubar app (one command, no clone)')
+  .option('--force', 'Reinstall even if an older copy is already in ~/Applications')
+  .action(async (opts: { force?: boolean }) => {
+    try {
+      const result = await installMenubarApp({ force: opts.force })
+      console.log(`\n  Ready. ${result.installedPath}\n`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Menubar install failed: ${message}\n`)
+      process.exit(1)
+    }
   })
 
 program

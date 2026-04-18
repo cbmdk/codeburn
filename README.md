@@ -19,7 +19,7 @@
   <img src="https://raw.githubusercontent.com/AgentSeal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **OpenCode**, **Pi**, and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. macOS menu bar widget via SwiftBar. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **OpenCode**, **Pi**, and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -156,14 +156,13 @@ The menu bar widget includes a currency picker with 17 common currencies. For an
 
 ## Menu Bar
 
-<img src="https://cdn.jsdelivr.net/gh/AgentSeal/codeburn@main/assets/menubar.png" alt="CodeBurn SwiftBar menu bar widget" width="260" />
+<img src="https://cdn.jsdelivr.net/gh/AgentSeal/codeburn@main/assets/menubar.png" alt="CodeBurn macOS menubar app" width="420" />
 
 ```bash
-codeburn install-menubar    # install SwiftBar/xbar plugin
-codeburn uninstall-menubar  # remove it
+npx codeburn menubar
 ```
 
-Requires [SwiftBar](https://github.com/swiftbar/SwiftBar) (`brew install --cask swiftbar`). Shows today's cost in the menu bar with a flame icon. Dropdown shows activity breakdown, model costs, token stats, per-provider cost breakdown, and a currency picker. Refreshes every 5 minutes.
+One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). Shows today's cost with a flame icon, opens a popover with agent tabs, period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes live via FSEvents plus a 60-second poll.
 
 ## What it tracks
 
@@ -269,7 +268,7 @@ src/
   classifier.ts   13-category task classifier
   types.ts        Type definitions
   format.ts       Text rendering (status bar)
-  menubar.ts      SwiftBar plugin generator
+  menubar-json.ts Payload builder consumed by the native macOS menubar app in mac/
   export.ts       CSV/JSON multi-period export
   config.ts       Config file management (~/.config/codeburn/)
   currency.ts     Currency conversion, exchange rates, Intl formatting

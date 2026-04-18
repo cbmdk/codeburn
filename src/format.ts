@@ -13,9 +13,20 @@ export function formatTokens(n: number): string {
   return n.toString()
 }
 
+/// Returns YYYY-MM-DD for the given date in the process-local timezone. Cheaper than shelling
+/// out to Intl.DateTimeFormat for every turn in a loop and avoids the UTC drift that bites
+/// `Date.toISOString().slice(0,10)` whenever the user runs this between local midnight and
+/// UTC midnight.
+function localDateString(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 export function renderStatusBar(projects: ProjectSummary[]): string {
   const now = new Date()
-  const today = now.toISOString().slice(0, 10)
+  const today = localDateString(now)
   const monthStart = `${today.slice(0, 7)}-01`
 
   let todayCost = 0, todayCalls = 0, monthCost = 0, monthCalls = 0
@@ -24,7 +35,11 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
         if (!turn.timestamp) continue
-        const day = turn.timestamp.slice(0, 10)
+        // Bucket by the session timestamp's local date so the user's "today" and "this month"
+        // match the wall clock on their machine. Session timestamps are stored as UTC ISO
+        // strings; naively slicing `timestamp.slice(0,10)` bucketed them by UTC date, which
+        // showed `Today $0` during the UTC-midnight-to-local-midnight window.
+        const day = localDateString(new Date(turn.timestamp))
         const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
         const turnCalls = turn.assistantCalls.length
         if (day === today) { todayCost += turnCost; todayCalls += turnCalls }
