@@ -78,9 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 // regardless of whether the user is currently viewing Today or a
                 // different period / provider.
                 await self.store.refreshQuietly(period: .today)
-                // Refresh the currently-viewed payload. Optimize is fast (~1s warm-cache)
-                // so include findings on every refresh.
+                self.refreshStatusButton()
                 await self.store.refresh(includeOptimize: true)
+                self.refreshStatusButton()
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
             }
         }

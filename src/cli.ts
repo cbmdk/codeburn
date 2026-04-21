@@ -388,7 +388,7 @@ program
   .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .action(async (opts) => {
     await loadPricing()
-    const noCache = noCacheRequested(opts)
+    const noCache = noCacheRequested(opts) || opts.format === 'menubar-json'
     const parseOptions = buildParseOptions(noCache, opts.format === 'terminal')
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)

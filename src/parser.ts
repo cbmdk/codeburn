@@ -671,11 +671,6 @@ async function evaluateSourceManifestState(
     return state
   }
 
-  const overlap = isManifestDateRangeOverlap(manifestEntry, dateRange)
-  if (overlap === false) {
-    return { source, parserVersion, manifestEntry, action: 'skip', reason: 'range-miss' }
-  }
-
   if (!manifestEntry.fingerprint || manifestEntry.fingerprintPath !== fingerprintPath) {
     const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'fingerprint-miss' }
     logCacheDebug(source.provider, source.path, state.reason!)
@@ -690,6 +685,10 @@ async function evaluateSourceManifestState(
   }
 
   if (fingerprintMatches(currentFingerprint, manifestEntry.fingerprint)) {
+    const overlap = isManifestDateRangeOverlap(manifestEntry, dateRange)
+    if (overlap === false) {
+      return { source, parserVersion, manifestEntry, action: 'skip', reason: 'range-miss' }
+    }
     return { source, parserVersion, manifestEntry, action: 'use-cache', currentFingerprint }
   }
 
@@ -767,7 +766,7 @@ async function refreshClaudeCacheUnit(
 
   if (state.action === 'use-cache') {
     const cached = await readSourceCacheEntry(manifest, 'claude', state.source.path, { allowStaleFingerprint: true })
-    if (cached) {
+    if (cached && cached.sessions.length > 0) {
       addSeenDeduplicationKeysFromSessions(cached.sessions, localSeenMsgIds)
       return { session: cached.sessions[0] ?? null, wrote: false, refreshed: false }
     }
@@ -969,7 +968,7 @@ async function parseProviderSources(
     let fullSessions: SessionSummary[] | null = null
     if (state.action === 'use-cache') {
       const cached = await readSourceCacheEntry(cacheManifest, providerName, state.source.path, { allowStaleFingerprint: true })
-      if (cached) fullSessions = cached.sessions
+      if (cached && cached.sessions.length > 0) fullSessions = cached.sessions
     }
 
     if (!fullSessions) {

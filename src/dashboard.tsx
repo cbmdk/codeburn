@@ -706,11 +706,11 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     }
   }, [findCachedWindow, makeCacheToken, noCache, storeCachedWindow])
 
-  const reloadData = useCallback(async (p: Period, prov: string, options?: { silent?: boolean }) => {
+  const reloadData = useCallback(async (p: Period, prov: string, options?: { silent?: boolean; skipCache?: boolean }) => {
     const range = getDateRange(p)
     const request = ++reloadSeqRef.current
     const token = makeCacheToken(prov, p)
-    const cachedWindow = findCachedWindow(prov, range)
+    const cachedWindow = options?.skipCache ? undefined : findCachedWindow(prov, range)
     if (!options?.silent) {
       setOptimizeResult(null)
     }
@@ -835,7 +835,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
 
   useEffect(() => {
     if (!refreshSeconds || refreshSeconds <= 0) return
-    const id = setInterval(() => { reloadData(period, activeProvider) }, refreshSeconds * 1000)
+    const id = setInterval(() => { reloadData(period, activeProvider, { skipCache: true }) }, refreshSeconds * 1000)
     return () => clearInterval(id)
   }, [refreshSeconds, period, activeProvider, reloadData])
 
