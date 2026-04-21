@@ -371,9 +371,9 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
     displayName: 'Cursor Agent',
 
     modelDisplayName(model: string): string {
-      const label = modelDisplayNames[model] ?? modelDisplayNames.default
-      if (model === 'default') return label
-      return label.endsWith('(est.)') ? label : `${label} (est.)`
+      if (model === 'default') return modelDisplayNames.default
+      const label = modelDisplayNames[model] ?? model
+      return `${label} (est.)`
     },
 
     toolDisplayName(rawTool: string): string {

@@ -74,6 +74,13 @@ describe('cursor-agent provider', () => {
     expect(provider.modelDisplayName('composer-1')).toBe('Composer 1 (est.)')
   })
 
+  it('falls through to raw model name for unknown models with single est. suffix', () => {
+    const provider = createCursorAgentProvider('/tmp/nonexistent-cursor-agent-fixture')
+
+    expect(provider.modelDisplayName('claude-5-future-model')).toBe('claude-5-future-model (est.)')
+    expect(provider.modelDisplayName('gpt-9')).toBe('gpt-9 (est.)')
+  })
+
   it('returns identity for tool display name', () => {
     const provider = createCursorAgentProvider('/tmp/nonexistent-cursor-agent-fixture')
     expect(provider.toolDisplayName('cursor:edit')).toBe('cursor:edit')
