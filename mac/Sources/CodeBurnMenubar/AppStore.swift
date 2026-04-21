@@ -73,10 +73,11 @@ final class AppStore {
         let key = currentKey
         guard !inFlightKeys.contains(key) else { return }
         inFlightKeys.insert(key)
-        isLoading = true
+        let showLoading = cache[key] == nil
+        if showLoading { isLoading = true }
         defer {
             inFlightKeys.remove(key)
-            isLoading = false
+            if showLoading { isLoading = false }
         }
         do {
             let fresh = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: includeOptimize)
@@ -85,6 +86,15 @@ final class AppStore {
         } catch {
             lastError = String(describing: error)
             NSLog("CodeBurn: fetch failed for \(key.period.rawValue)/\(key.provider.rawValue): \(error)")
+        }
+    }
+
+    /// Prefetch all periods so tab switching is instant. Skips any period already cached.
+    func prefetchAll() async {
+        for period in Period.allCases {
+            let key = PayloadCacheKey(period: period, provider: .all)
+            if cache[key] != nil { continue }
+            await refreshQuietly(period: period)
         }
     }
 

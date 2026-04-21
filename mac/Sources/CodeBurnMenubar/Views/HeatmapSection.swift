@@ -344,7 +344,7 @@ private struct BarTooltipCard: View {
 private func prettyDate(_ ymd: String) -> String {
     let parser = DateFormatter()
     parser.dateFormat = "yyyy-MM-dd"
-    parser.timeZone = TimeZone(identifier: "UTC")
+    parser.timeZone = .current
     guard let date = parser.date(from: ymd) else { return ymd }
     let display = DateFormatter()
     display.dateFormat = "EEE MMM d"
@@ -392,11 +392,11 @@ private struct TrendStats {
 
 private func buildTrendBars(from days: [DailyHistoryEntry]) -> [TrendBar] {
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let entryByDate = Dictionary(uniqueKeysWithValues: days.map { ($0.date, $0) })
@@ -427,11 +427,11 @@ private func computeTrendStats(bars: [TrendBar], allDays: [DailyHistoryEntry]) -
     let peak = bars.filter { $0.cost > 0 }.max(by: { $0.cost < $1.cost })
 
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let today = calendar.startOfDay(for: Date())
@@ -547,11 +547,11 @@ private struct ForecastStats {
 
 private func computeForecast(days: [DailyHistoryEntry]) -> ForecastStats {
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let now = Date()
@@ -798,17 +798,17 @@ private func computeAllStats(payload: MenubarPayload) -> AllStats {
     let favoriteModel = payload.current.topModels.first?.name ?? "—"
 
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let displayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "MMM d"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
 

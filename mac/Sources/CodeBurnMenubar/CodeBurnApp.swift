@@ -71,17 +71,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func startRefreshLoop() {
         refreshTask = Task { [weak self] in
+            guard let s = self else { return }
+            // First cycle: fetch current view, then prefetch all periods in background
+            await s.store.refreshQuietly(period: .today)
+            s.refreshStatusButton()
+            await s.store.refresh(includeOptimize: true)
+            s.refreshStatusButton()
+            await s.store.prefetchAll()
+
             while !Task.isCancelled {
-                guard let self else { return }
-                // Always keep the (today, all) payload warm. The menubar title and the
-                // agent tab strip both read from it, so it has to refresh every cycle
-                // regardless of whether the user is currently viewing Today or a
-                // different period / provider.
-                await self.store.refreshQuietly(period: .today)
-                self.refreshStatusButton()
-                await self.store.refresh(includeOptimize: true)
-                self.refreshStatusButton()
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
+                guard let s = self else { return }
+                await s.store.refreshQuietly(period: .today)
+                s.refreshStatusButton()
+                await s.store.refresh(includeOptimize: true)
+                s.refreshStatusButton()
             }
         }
     }
