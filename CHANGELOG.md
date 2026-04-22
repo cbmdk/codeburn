@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.9 - 2026-04-22
+
+### Fixed
+- **Menubar showed stale prices.** The "all providers" query used `end: now` while per-provider queries used `end: endOfDay`, causing sessions timestamped after the capture moment to be excluded from totals. Now uses `periodInfo.range` consistently across all queries.
+
+### Changed (macOS menubar)
+- **Variable-width status item is now the default.** The menubar pill hugs the rendered text in both compact and default modes instead of reserving a fixed 130pt slot.
+
 ## 0.8.8 - 2026-04-22
 
 ### Fixed (CLI)
