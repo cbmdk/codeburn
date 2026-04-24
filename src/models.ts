@@ -224,6 +224,8 @@ export function getShortModelName(model: string): string {
     'gpt-5.4-mini': 'GPT-5.4 Mini',
     'gpt-5.4': 'GPT-5.4',
     'gpt-5.3-codex': 'GPT-5.3 Codex',
+    'gpt-5.2-low': 'GPT-5.2 Low',
+    'gpt-5.2': 'GPT-5.2',
     'gpt-5-mini': 'GPT-5 Mini',
     'gpt-5': 'GPT-5',
     'gemini-2.5-pro': 'Gemini 2.5 Pro',

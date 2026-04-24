@@ -18,6 +18,8 @@ const modelDisplayNames: Record<string, string> = {
   'composer-1': 'Composer 1',
   'grok-code-fast-1': 'Grok Code Fast',
   'gemini-3-pro': 'Gemini 3 Pro',
+  'gpt-5.2-low': 'GPT-5.2 Low',
+  'gpt-5.2': 'GPT-5.2',
   'gpt-5.1-codex-high': 'GPT-5.1 Codex',
   'gpt-5': 'GPT-5',
   'gpt-4.1': 'GPT-4.1',
