@@ -210,15 +210,15 @@ The progress bar shows API-equivalent cost vs subscription price. Presets use pu
 npx codeburn menubar
 ```
 
-One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). Shows today's cost with a flame icon, opens a popover with agent tabs, period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes live via FSEvents plus a 15-second poll.
+One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). The menubar icon always shows **today's spend** (so $0 is normal if you haven't used AI tools today). Click to open a popover with agent tabs, period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
 
 **Compact mode** shrinks the menubar item to fit the text, dropping decimals (e.g. `$110` instead of `$110.20`). Opt in with:
 
 ```bash
-defaults write CodeBurnMenubar CodeBurnMenubarCompact -bool true
+defaults write org.agentseal.codeburn-menubar CodeBurnMenubarCompact -bool true
 ```
 
-Relaunch the app to apply. To revert: `defaults delete CodeBurnMenubar CodeBurnMenubarCompact`.
+Relaunch the app to apply. To revert: `defaults delete org.agentseal.codeburn-menubar CodeBurnMenubarCompact`.
 
 ## What it tracks
 
