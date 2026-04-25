@@ -889,4 +889,17 @@ program
     await renderCompare(range, opts.provider)
   })
 
+program
+  .command('yield')
+  .description('Track which AI spend shipped to main vs reverted/abandoned (experimental)')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'week')
+  .action(async (opts) => {
+    const { computeYield, formatYieldSummary } = await import('./yield.js')
+    await loadPricing()
+    const { range, label } = getDateRange(opts.period)
+    console.log(`\n  Analyzing yield for ${label}...\n`)
+    const summary = await computeYield(range, process.cwd())
+    console.log(formatYieldSummary(summary))
+  })
+
 program.parse()
