@@ -49,7 +49,14 @@ public static class DataClient
             CreateNoWindow = true
         };
 
-        // Optionally augment PATH, but for now skip as Windows PATH should work
+        // Ensure PATH includes npm global bin
+        var env = startInfo.EnvironmentVariables;
+        var path = env["PATH"] ?? "";
+        var npmPath = @"C:\Users\chrimo\AppData\Roaming\npm";
+        if (!path.Contains(npmPath))
+        {
+            env["PATH"] = path + ";" + npmPath;
+        }
 
         using var process = Process.Start(startInfo);
         if (process == null)

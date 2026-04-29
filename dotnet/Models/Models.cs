@@ -3,7 +3,6 @@ using System.Collections.Generic;
 
 namespace CodeBurnMenubar.Models;
 
-// Data models (simplified from Swift)
 public class MenubarPayload
 {
     [JsonPropertyName("current")]
@@ -23,6 +22,30 @@ public class CurrentBlock
 
     [JsonPropertyName("calls")]
     public int Calls { get; set; }
+
+    [JsonPropertyName("sessions")]
+    public int Sessions { get; set; }
+
+    [JsonPropertyName("activities")]
+    public List<ActivityEntry>? Activities { get; set; }
+}
+
+public class ActivityEntry
+{
+    [JsonPropertyName("label")]
+    public required string Label { get; set; }
+
+    [JsonPropertyName("cost")]
+    public double Cost { get; set; }
+
+    [JsonPropertyName("turns")]
+    public int? Turns { get; set; }
+
+    [JsonPropertyName("oneShotPct")]
+    public int? OneShotPct { get; set; }
+
+    [JsonPropertyName("color")]
+    public string? Color { get; set; }
 }
 
 public class OptimizeBlock
@@ -53,4 +76,20 @@ public class DailyHistoryEntry
 
     [JsonPropertyName("outputTokens")]
     public int OutputTokens { get; set; }
+}
+
+public class ChartBarItem
+{
+    public double BarHeight { get; set; }
+    public long Tokens { get; set; }
+    public bool IsHighlighted { get; set; }
+}
+
+public class ActivityBarItem
+{
+    public required string Label { get; set; }
+    public double Cost { get; set; }
+    public int? Turns { get; set; }
+    public int? OneShotPct { get; set; }
+    public double BarWidth { get; set; }
 }

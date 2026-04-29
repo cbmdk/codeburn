@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:CodeBurnMenubar.ViewModels"
+        xmlns:models="using:CodeBurnMenubar.Models"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="360" d:DesignHeight="660"
@@ -14,21 +15,373 @@
         WindowDecorations="None"
         Topmost="True"
         ShowInTaskbar="False">
+
     <Design.DataContext>
         <vm:MainViewModel/>
     </Design.DataContext>
 
-    <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="8">
-        <StackPanel Background="White">
-            <Button Content="X" HorizontalAlignment="Right" Width="30" Command="{Binding CloseCommand}"/>
-            <TextBlock Text="CodeBurn Menubar" FontSize="20" HorizontalAlignment="Center" Margin="10"/>
-            <TextBlock Text="Loading..." HorizontalAlignment="Center" IsVisible="{Binding IsLoading}"/>
-            <TextBlock Text="{Binding LastError}" HorizontalAlignment="Center" Foreground="Red" IsVisible="{Binding HasError}"/>
-            <StackPanel IsVisible="{Binding HasData}">
-                <TextBlock Text="{Binding Payload.Current.Cost, StringFormat='Cost: {0:C}'}" HorizontalAlignment="Center"/>
-                <TextBlock Text="{Binding Payload.Current.Calls, StringFormat='Calls: {0}'}" HorizontalAlignment="Center"/>
-            </StackPanel>
-            <Button Content="Refresh" Command="{Binding RefreshCommand}" HorizontalAlignment="Center" Margin="10"/>
-        </StackPanel>
+    <Window.Styles>
+        <!-- Strip default Button chrome -->
+        <Style Selector="Button.tab /template/ ContentPresenter">
+            <Setter Property="CornerRadius" Value="10"/>
+        </Style>
+        <Style Selector="Button.tab:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style Selector="Button.tab:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+
+        <!-- Provider tabs -->
+        <Style Selector="Button.providerTab">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.providerTab TextBlock">
+            <Setter Property="Foreground" Value="#AAAAAA"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="Button.providerTab /template/ ContentPresenter">
+            <Setter Property="CornerRadius" Value="12"/>
+        </Style>
+        <Style Selector="Button.providerTab:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2A2A2A"/>
+        </Style>
+        <Style Selector="Button.providerTab:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2A2A2A"/>
+        </Style>
+        <Style Selector="Button.providerTab.selected">
+            <Setter Property="Background" Value="#F5622D"/>
+        </Style>
+        <Style Selector="Button.providerTab.selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="#F5622D"/>
+            <Setter Property="CornerRadius" Value="12"/>
+        </Style>
+        <Style Selector="Button.providerTab.selected:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#E04F20"/>
+        </Style>
+        <Style Selector="Button.providerTab.selected TextBlock">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <!-- Period tabs (inside dark pill) -->
+        <Style Selector="Button.periodTab">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.periodTab TextBlock">
+            <Setter Property="Foreground" Value="#AAAAAA"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="Button.periodTab /template/ ContentPresenter">
+            <Setter Property="CornerRadius" Value="8"/>
+        </Style>
+        <Style Selector="Button.periodTab:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#3A3A3A"/>
+        </Style>
+        <Style Selector="Button.periodTab:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="#3A3A3A"/>
+        </Style>
+        <Style Selector="Button.periodTab.selected">
+            <Setter Property="Background" Value="White"/>
+        </Style>
+        <Style Selector="Button.periodTab.selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="8"/>
+        </Style>
+        <Style Selector="Button.periodTab.selected:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#F0F0F0"/>
+        </Style>
+        <Style Selector="Button.periodTab.selected TextBlock">
+            <Setter Property="Foreground" Value="#1C1C1E"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <!-- View tabs (Trend/Forecast/Pulse/Stats) -->
+        <Style Selector="Button.viewTab">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0,0,0,0"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.viewTab TextBlock">
+            <Setter Property="Foreground" Value="#8E8E93"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style Selector="Button.viewTab /template/ ContentPresenter">
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="Button.viewTab:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#F8F8F8"/>
+        </Style>
+        <Style Selector="Button.viewTab:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="#F0F0F0"/>
+        </Style>
+        <Style Selector="Button.viewTab.selected">
+            <Setter Property="BorderBrush" Value="#F5622D"/>
+            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        </Style>
+        <Style Selector="Button.viewTab.selected TextBlock">
+            <Setter Property="Foreground" Value="#F5622D"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+    </Window.Styles>
+
+    <Border BorderBrush="#333333" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+        <Grid RowDefinitions="Auto,Auto,*,Auto">
+
+            <!-- ── Header ── -->
+            <Border Grid.Row="0" Background="#1C1C1E" Padding="14,12">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="CodeBurn" Foreground="White" FontWeight="Bold" FontSize="15"/>
+                        <TextBlock Text="AI Coding Cost Tracker" Foreground="#8E8E93" FontSize="11" Margin="0,1,0,0"/>
+                    </StackPanel>
+                    <Border Grid.Column="1" Background="#F5622D" CornerRadius="6" Padding="10,5" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="●" Foreground="White" FontSize="8" VerticalAlignment="Center"/>
+                            <TextBlock Text="Update" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- ── Provider tabs ── -->
+            <Border Grid.Row="1" Background="#141414" Padding="6,5">
+                <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <Button Classes="providerTab" Classes.selected="{Binding IsAllProvider}"
+                                Command="{Binding SelectProviderCommand}" CommandParameter="all">
+                            <TextBlock>
+                                <Run Text="All "/>
+                                <Run Text="{Binding CostDisplay}"/>
+                            </TextBlock>
+                        </Button>
+                        <Button Classes="providerTab" Classes.selected="{Binding IsClaudeProvider}"
+                                Command="{Binding SelectProviderCommand}" CommandParameter="claude">
+                            <TextBlock Text="Claude"/>
+                        </Button>
+                        <Button Classes="providerTab" Classes.selected="{Binding IsCodexProvider}"
+                                Command="{Binding SelectProviderCommand}" CommandParameter="codex">
+                            <TextBlock Text="Codex"/>
+                        </Button>
+                        <Button Classes="providerTab" Classes.selected="{Binding IsCursorProvider}"
+                                Command="{Binding SelectProviderCommand}" CommandParameter="cursor">
+                            <TextBlock Text="Cursor"/>
+                        </Button>
+                        <Button Classes="providerTab" Classes.selected="{Binding IsPilotProvider}"
+                                Command="{Binding SelectProviderCommand}" CommandParameter="pilot">
+                            <TextBlock Text="Pilot"/>
+                        </Button>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- ── Main scrollable content ── -->
+            <ScrollViewer Grid.Row="2" Background="White" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+
+                    <!-- Date + cost block -->
+                    <StackPanel Margin="14,12,14,0">
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                            <Border Width="7" Height="7" Background="#F5622D" CornerRadius="4" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding DateDisplay}" Foreground="#555555" FontSize="11"/>
+                        </StackPanel>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding CostDisplay}" FontSize="36" FontWeight="Bold" Foreground="#F5622D"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Margin="0,0,0,6">
+                                <TextBlock Text="{Binding CallsDisplay}" Foreground="#555555" FontSize="11" HorizontalAlignment="Right"/>
+                                <TextBlock Text="{Binding SessionsDisplay}" Foreground="#8E8E93" FontSize="11"
+                                           HorizontalAlignment="Right" IsVisible="{Binding HasData}"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Period selector -->
+                    <Border Background="#2A2A2A" CornerRadius="10" Margin="14,10" Padding="3">
+                        <StackPanel Orientation="Horizontal" Spacing="0">
+                            <Button Classes="periodTab" Classes.selected="{Binding IsTodayPeriod}"
+                                    Command="{Binding SelectPeriodCommand}" CommandParameter="today">
+                                <TextBlock Text="Today"/>
+                            </Button>
+                            <Button Classes="periodTab" Classes.selected="{Binding Is7DPeriod}"
+                                    Command="{Binding SelectPeriodCommand}" CommandParameter="7d">
+                                <TextBlock Text="7 Days"/>
+                            </Button>
+                            <Button Classes="periodTab" Classes.selected="{Binding Is30DPeriod}"
+                                    Command="{Binding SelectPeriodCommand}" CommandParameter="30d">
+                                <TextBlock Text="30 Days"/>
+                            </Button>
+                            <Button Classes="periodTab" Classes.selected="{Binding IsMonthPeriod}"
+                                    Command="{Binding SelectPeriodCommand}" CommandParameter="month">
+                                <TextBlock Text="Month"/>
+                            </Button>
+                            <Button Classes="periodTab" Classes.selected="{Binding IsAllPeriod}"
+                                    Command="{Binding SelectPeriodCommand}" CommandParameter="all">
+                                <TextBlock Text="All"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- View tabs -->
+                    <Border BorderBrush="#E5E5EA" BorderThickness="0,0,0,1">
+                        <StackPanel Orientation="Horizontal" Margin="4,0">
+                            <Button Classes="viewTab" Classes.selected="{Binding IsTrendTab}"
+                                    Command="{Binding SelectTabCommand}" CommandParameter="Trend">
+                                <TextBlock Text="Trend"/>
+                            </Button>
+                            <Button Classes="viewTab" Classes.selected="{Binding IsForecastTab}"
+                                    Command="{Binding SelectTabCommand}" CommandParameter="Forecast">
+                                <TextBlock Text="Forecast"/>
+                            </Button>
+                            <Button Classes="viewTab" Classes.selected="{Binding IsPulseTab}"
+                                    Command="{Binding SelectTabCommand}" CommandParameter="Pulse">
+                                <TextBlock Text="Pulse"/>
+                            </Button>
+                            <Button Classes="viewTab" Classes.selected="{Binding IsStatsTab}"
+                                    Command="{Binding SelectTabCommand}" CommandParameter="Stats">
+                                <TextBlock Text="Stats"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Trend chart section -->
+                    <StackPanel IsVisible="{Binding IsTrendTab}" Margin="14,10,14,0">
+                        <TextBlock Foreground="#555555" FontSize="12" Margin="0,0,0,2">
+                            <Run Text="Last "/>
+                            <Run Text="{Binding DayCount}"/>
+                            <Run Text=" days"/>
+                        </TextBlock>
+                        <TextBlock Text="{Binding TotalTokensLabel}" FontSize="22" FontWeight="Bold"
+                                   Foreground="#1C1C1E" Margin="0,0,0,8"/>
+
+                        <!-- Bar chart -->
+                        <Border Height="90" IsVisible="{Binding HasData}">
+                            <ItemsControl ItemsSource="{Binding ChartBars}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Stretch"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:ChartBarItem">
+                                        <Grid Width="12" VerticalAlignment="Stretch" Margin="1,0">
+                                            <Border VerticalAlignment="Bottom"
+                                                    Height="{Binding BarHeight}"
+                                                    Background="#F5622D"
+                                                    CornerRadius="2,2,0,0"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+
+                        <!-- Stats row -->
+                        <Grid ColumnDefinitions="*,*,*" Margin="0,8,0,0">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Avg/day" Foreground="#8E8E93" FontSize="10"/>
+                                <TextBlock Text="{Binding AvgDailyTokensLabel}" FontSize="12"
+                                           FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                <TextBlock Text="Peak" Foreground="#8E8E93" FontSize="10"/>
+                                <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#1C1C1E">
+                                    <Run Text="{Binding PeakTokensLabel}"/>
+                                    <Run Text=" "/>
+                                    <Run Text="{Binding PeakDateLabel}"/>
+                                </TextBlock>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" HorizontalAlignment="Right">
+                                <TextBlock Text="Yesterday" Foreground="#8E8E93" FontSize="10"/>
+                                <TextBlock Text="{Binding YesterdayTokensLabel}" FontSize="12"
+                                           FontWeight="SemiBold" Foreground="#1C1C1E"
+                                           HorizontalAlignment="Right"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Activity section -->
+                    <StackPanel IsVisible="{Binding HasActivities}" Margin="0,12,0,0">
+                        <Border BorderBrush="#E5E5EA" BorderThickness="0,1,0,0" Padding="14,8,14,4">
+                            <Grid ColumnDefinitions="*,60,42,42">
+                                <TextBlock Text="Activity" Foreground="#555555" FontSize="12" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="1" Text="Cost" Foreground="#8E8E93" FontSize="11" TextAlignment="Right"/>
+                                <TextBlock Grid.Column="2" Text="Turns" Foreground="#8E8E93" FontSize="11" TextAlignment="Right"/>
+                                <TextBlock Grid.Column="3" Text="1-shot" Foreground="#8E8E93" FontSize="11" TextAlignment="Right"/>
+                            </Grid>
+                        </Border>
+                        <ItemsControl ItemsSource="{Binding ActivityBars}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:ActivityBarItem">
+                                    <Grid ColumnDefinitions="*,60,42,42" Margin="14,3,14,3">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Text="{Binding Label}" FontSize="12" Foreground="#1C1C1E"/>
+                                            <Border Height="4" CornerRadius="2" HorizontalAlignment="Left"
+                                                    Background="#F5622D" Width="{Binding BarWidth}"/>
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding Cost, StringFormat='${0:N2}'}"
+                                                   FontSize="12" Foreground="#1C1C1E" TextAlignment="Right"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Turns}"
+                                                   FontSize="12" Foreground="#555555" TextAlignment="Right"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3"
+                                                   FontSize="12" Foreground="#555555" TextAlignment="Right"
+                                                   VerticalAlignment="Center">
+                                            <Run Text="{Binding OneShotPct}"/>
+                                            <Run Text="%"/>
+                                        </TextBlock>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                    <!-- Loading indicator -->
+                    <TextBlock Text="Loading…" HorizontalAlignment="Center" Margin="0,24"
+                               Foreground="#8E8E93" FontSize="13" IsVisible="{Binding IsLoading}"/>
+
+                    <!-- Error display -->
+                    <Border IsVisible="{Binding HasError}" Margin="14,12" Background="#FFF0F0"
+                            CornerRadius="6" Padding="10,8">
+                        <TextBlock Text="{Binding LastError}" Foreground="#E53935"
+                                   FontSize="12" TextWrapping="Wrap"/>
+                    </Border>
+
+                    <Rectangle Height="12"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ── Footer ── -->
+            <Border Grid.Row="3" Background="#F5F5F7" BorderBrush="#E5E5EA"
+                    BorderThickness="0,1,0,0" Padding="10,7">
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <Border Background="#E5E5EA" CornerRadius="4" Padding="6,3">
+                            <TextBlock Text="$ USD" FontSize="11" Foreground="#555555"/>
+                        </Border>
+                        <Button Command="{Binding RefreshCommand}" Background="Transparent"
+                                BorderThickness="0" Padding="4,2" CornerRadius="4">
+                            <TextBlock Text="↻" FontSize="15" Foreground="#555555"/>
+                        </Button>
+                        <Border Background="#E5E5EA" CornerRadius="4" Padding="6,3">
+                            <TextBlock Text="⬆ Export" FontSize="11" Foreground="#555555"/>
+                        </Border>
+                    </StackPanel>
+                    <Button Grid.Column="2" Command="{Binding CloseCommand}"
+                            Background="#F5622D" CornerRadius="6" Padding="12,5" BorderThickness="0">
+                        <TextBlock Text="Close" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+        </Grid>
     </Border>
 </Window>

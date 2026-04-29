@@ -1,3 +1,4 @@
+using System;
 using Avalonia.Controls;
 using CodeBurnMenubar.ViewModels;
 using CommunityToolkit.Mvvm.Input;
@@ -9,8 +10,14 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        DataContext = new MainViewModel();
-        var vm = (MainViewModel)DataContext!;
-        vm.CloseCommand = new RelayCommand(Close);
+        DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            vm.CloseCommand = new RelayCommand(Close);
+        }
     }
 }
