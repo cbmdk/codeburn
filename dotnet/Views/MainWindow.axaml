@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CodeBurnMenubar.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="360" d:DesignHeight="660"
+        x:Class="CodeBurnMenubar.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="CodeBurn"
+        Width="360"
+        Height="660"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False"
+        WindowDecorations="None"
+        Topmost="True"
+        ShowInTaskbar="False">
+    <Design.DataContext>
+        <vm:MainViewModel/>
+    </Design.DataContext>
+
+    <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="8">
+        <StackPanel Background="White">
+            <Button Content="X" HorizontalAlignment="Right" Width="30" Command="{Binding CloseCommand}"/>
+            <TextBlock Text="CodeBurn Menubar" FontSize="20" HorizontalAlignment="Center" Margin="10"/>
+            <TextBlock Text="Loading..." HorizontalAlignment="Center" IsVisible="{Binding IsLoading}"/>
+            <TextBlock Text="{Binding LastError}" HorizontalAlignment="Center" Foreground="Red" IsVisible="{Binding HasError}"/>
+            <StackPanel IsVisible="{Binding HasData}">
+                <TextBlock Text="{Binding Payload.Current.Cost, StringFormat='Cost: {0:C}'}" HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding Payload.Current.Calls, StringFormat='Calls: {0}'}" HorizontalAlignment="Center"/>
+            </StackPanel>
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" HorizontalAlignment="Center" Margin="10"/>
+        </StackPanel>
+    </Border>
+</Window>

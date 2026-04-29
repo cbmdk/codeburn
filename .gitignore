@@ -1,10 +1,12 @@
 node_modules/
 dist/
 *.tgz
-
+.vs
 # OS
 .DS_Store
 Thumbs.db
+bin/
+obj/
 
 # Editor / IDE
 .vscode/
