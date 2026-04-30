@@ -17,7 +17,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is MainViewModel vm)
         {
-            vm.CloseCommand = new RelayCommand(Close);
+            vm.CloseCommand = new RelayCommand(Hide);
         }
     }
 }

@@ -307,6 +307,126 @@
                         </Grid>
                     </StackPanel>
 
+                    <!-- Forecast tab -->
+                    <StackPanel IsVisible="{Binding IsForecastTab}" Margin="14,12,14,0" Spacing="0">
+                        <TextBlock Text="Projected this month" Foreground="#555555" FontSize="12" Margin="0,0,0,2"/>
+                        <TextBlock Text="{Binding ProjectedMonthlyCostLabel}" FontSize="36" FontWeight="Bold"
+                                   Foreground="#F5622D" Margin="0,0,0,4"/>
+                        <TextBlock Foreground="#8E8E93" FontSize="12" Margin="0,0,0,16">
+                            <Run Text="Based on "/>
+                            <Run Text="{Binding DayCount}"/>
+                            <Run Text="-day avg ("/>
+                            <Run Text="{Binding DailyBurnRateLabel}"/>
+                            <Run Text=")"/>
+                        </TextBlock>
+
+                        <TextBlock Text="Month progress" Foreground="#555555" FontSize="12" Margin="0,0,0,6"/>
+                        <Grid Height="8" Margin="0,0,0,4">
+                            <Border Background="#E5E5EA" CornerRadius="4"/>
+                            <Border HorizontalAlignment="Left" Width="{Binding MonthProgressWidth}"
+                                    Background="#F5622D" CornerRadius="4"/>
+                        </Grid>
+                        <TextBlock Text="{Binding MonthProgressLabel}" Foreground="#8E8E93" FontSize="11"/>
+                    </StackPanel>
+
+                    <!-- Pulse tab -->
+                    <StackPanel IsVisible="{Binding IsPulseTab}" Margin="14,12,14,0" Spacing="0">
+                        <TextBlock Text="Usage pulse" Foreground="#555555" FontSize="12"
+                                   FontWeight="SemiBold" Margin="0,0,0,12"/>
+                        <Border BorderBrush="#E5E5EA" BorderThickness="0,0,0,1" Padding="0,0,0,10" Margin="0,0,0,10">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="Cost per call" Foreground="#555555" FontSize="13"/>
+                                <TextBlock Grid.Column="1" Text="{Binding CostPerCallLabel}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                            </Grid>
+                        </Border>
+                        <Border BorderBrush="#E5E5EA" BorderThickness="0,0,0,1" Padding="0,0,0,10" Margin="0,0,0,10">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="Avg calls / day" Foreground="#555555" FontSize="13"/>
+                                <TextBlock Grid.Column="1" Text="{Binding AvgCallsPerDayLabel}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                            </Grid>
+                        </Border>
+                        <Border BorderBrush="#E5E5EA" BorderThickness="0,0,0,1" Padding="0,0,0,10" Margin="0,0,0,10">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="Busiest day" Foreground="#555555" FontSize="13"/>
+                                <TextBlock Grid.Column="1" Text="{Binding BusiestDayLabel}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                            </Grid>
+                        </Border>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Token ratio" Foreground="#555555" FontSize="13"/>
+                            <TextBlock Grid.Column="1" Text="{Binding TokenRatioLabel}"
+                                       FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Stats tab -->
+                    <StackPanel IsVisible="{Binding IsStatsTab}" Margin="14,12,14,0" Spacing="0">
+                        <TextBlock Text="Summary" Foreground="#555555" FontSize="12"
+                                   FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+                        <Border Background="#F9F9FB" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Total cost" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CostDisplay}"
+                                               FontSize="13" FontWeight="Bold" Foreground="#F5622D"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Total calls" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CallsDisplay}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding HasData}">
+                                    <TextBlock Text="Sessions" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding SessionsDisplay}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="#F9F9FB" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Total tokens" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding TotalTokensLabel}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Input tokens" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding TotalInputTokensLabel}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Output tokens" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding TotalOutputTokensLabel}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="#F9F9FB" CornerRadius="8" Padding="12,10">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Avg cost / day" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding AvgCostPerDayLabel}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Avg calls / day" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding AvgCallsPerDayLabel}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Peak day cost" Foreground="#555555" FontSize="13"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding PeakDayCostLabel}"
+                                               FontSize="13" FontWeight="SemiBold" Foreground="#1C1C1E"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
                     <!-- Activity section -->
                     <StackPanel IsVisible="{Binding HasActivities}" Margin="0,12,0,0">
                         <Border BorderBrush="#E5E5EA" BorderThickness="0,1,0,0" Padding="14,8,14,4">

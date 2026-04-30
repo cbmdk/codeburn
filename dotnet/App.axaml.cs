@@ -53,10 +53,15 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    private MainWindow? _popover;
+
     private void ShowPopover(MainViewModel viewModel)
     {
-        var window = new MainWindow { DataContext = viewModel };
-        window.Show();
-        window.Activate();
+        if (_popover == null)
+            _popover = new MainWindow { DataContext = viewModel };
+
+        _ = viewModel.RefreshAsync();
+        _popover.Show();
+        _popover.Activate();
     }
 }

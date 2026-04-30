@@ -61,13 +61,33 @@ public partial class MainViewModel : ViewModelBase
     public string CallsDisplay => Payload != null ? $"{Payload.Current.Calls:N0} calls" : "—";
     public string SessionsDisplay => Payload != null ? $"{Payload.Current.Sessions:N0} sessions" : "";
 
-    public int DayCount => Payload?.History.Daily.Count ?? 0;
+    // History filtered to the selected period — drives all trend-section values
+    private IReadOnlyList<DailyHistoryEntry> PeriodHistory
+    {
+        get
+        {
+            var all = Payload?.History.Daily;
+            if (all == null || all.Count == 0) return [];
+            var cutoff = SelectedPeriod switch
+            {
+                "today" => DateTime.Today,
+                "7d"    => DateTime.Today.AddDays(-7),
+                "30d"   => DateTime.Today.AddDays(-30),
+                "month" => new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1),
+                _       => DateTime.MinValue,
+            };
+            if (cutoff == DateTime.MinValue) return all;
+            return all.Where(d => DateTime.TryParse(d.Date, out var dt) && dt.Date >= cutoff).ToList();
+        }
+    }
+
+    public int DayCount => PeriodHistory.Count;
 
     public string TotalTokensLabel
     {
         get
         {
-            var total = Payload?.History.Daily.Sum(d => (long)(d.InputTokens + d.OutputTokens)) ?? 0;
+            var total = PeriodHistory.Sum(d => (long)(d.InputTokens + d.OutputTokens));
             return FormatTokens(total);
         }
     }
@@ -76,10 +96,10 @@ public partial class MainViewModel : ViewModelBase
     {
         get
         {
-            var days = Payload?.History.Daily.Count ?? 0;
-            if (days == 0) return "—";
-            var total = Payload!.History.Daily.Sum(d => (long)(d.InputTokens + d.OutputTokens));
-            return FormatTokens(total / days);
+            var ph = PeriodHistory;
+            if (ph.Count == 0) return "—";
+            var total = ph.Sum(d => (long)(d.InputTokens + d.OutputTokens));
+            return FormatTokens(total / ph.Count);
         }
     }
 
@@ -87,9 +107,9 @@ public partial class MainViewModel : ViewModelBase
     {
         get
         {
-            if (Payload == null || Payload.History.Daily.Count == 0) return "—";
-            var peak = Payload.History.Daily.Max(d => d.InputTokens + d.OutputTokens);
-            return FormatTokens(peak);
+            var ph = PeriodHistory;
+            if (ph.Count == 0) return "—";
+            return FormatTokens(ph.Max(d => d.InputTokens + d.OutputTokens));
         }
     }
 
@@ -97,13 +117,10 @@ public partial class MainViewModel : ViewModelBase
     {
         get
         {
-            if (Payload == null || Payload.History.Daily.Count == 0) return "";
-            var entry = Payload.History.Daily
-                .OrderByDescending(d => d.InputTokens + d.OutputTokens)
-                .First();
-            if (DateTime.TryParse(entry.Date, out var dt))
-                return dt.ToString("MM/dd");
-            return entry.Date;
+            var ph = PeriodHistory;
+            if (ph.Count == 0) return "";
+            var entry = ph.OrderByDescending(d => d.InputTokens + d.OutputTokens).First();
+            return DateTime.TryParse(entry.Date, out var dt) ? dt.ToString("MM/dd") : entry.Date;
         }
     }
 
@@ -111,9 +128,9 @@ public partial class MainViewModel : ViewModelBase
     {
         get
         {
-            var daily = Payload?.History.Daily;
-            if (daily == null || daily.Count < 2) return "—";
-            var yesterday = daily[daily.Count - 2];
+            var all = Payload?.History.Daily;
+            if (all == null || all.Count < 2) return "—";
+            var yesterday = all[all.Count - 2];
             return FormatTokens(yesterday.InputTokens + yesterday.OutputTokens);
         }
     }
@@ -122,16 +139,16 @@ public partial class MainViewModel : ViewModelBase
     {
         get
         {
-            var daily = Payload?.History.Daily;
-            if (daily == null || daily.Count == 0) return [];
-            var max = daily.Max(d => d.InputTokens + d.OutputTokens);
+            var ph = PeriodHistory;
+            if (ph.Count == 0) return [];
+            var max = ph.Max(d => d.InputTokens + d.OutputTokens);
             if (max == 0) return [];
             const double maxH = 80;
-            var peakIdx = daily
+            var peakIdx = ph
                 .Select((d, i) => (d, i))
                 .OrderByDescending(x => x.d.InputTokens + x.d.OutputTokens)
                 .First().i;
-            return daily.Select((d, i) => new ChartBarItem
+            return ph.Select((d, i) => new ChartBarItem
             {
                 Tokens = d.InputTokens + d.OutputTokens,
                 BarHeight = Math.Max(3, (d.InputTokens + d.OutputTokens) / (double)max * maxH),
@@ -161,6 +178,120 @@ public partial class MainViewModel : ViewModelBase
 
     public bool HasActivities => (Payload?.Current.Activities?.Count ?? 0) > 0;
 
+    // --- Forecast tab ---
+
+    private static int DaysInCurrentMonth => DateTime.DaysInMonth(DateTime.Now.Year, DateTime.Now.Month);
+    private static int DayOfMonth => DateTime.Now.Day;
+
+    public string ProjectedMonthlyCostLabel
+    {
+        get
+        {
+            var days = Payload?.History.Daily.Count ?? 0;
+            if (days == 0) return "—";
+            var dailyAvg = Payload!.Current.Cost / days;
+            return $"${dailyAvg * DaysInCurrentMonth:N2}";
+        }
+    }
+
+    public string DailyBurnRateLabel
+    {
+        get
+        {
+            var days = Payload?.History.Daily.Count ?? 0;
+            if (days == 0) return "—";
+            return $"${Payload!.Current.Cost / days:N2}/day";
+        }
+    }
+
+    public string MonthProgressLabel => $"{DayOfMonth} of {DaysInCurrentMonth} days";
+    public double MonthProgressWidth => DayOfMonth / (double)DaysInCurrentMonth * 300;
+
+    // --- Pulse tab ---
+
+    public string CostPerCallLabel
+    {
+        get
+        {
+            var calls = Payload?.Current.Calls ?? 0;
+            if (calls == 0) return "—";
+            return $"${Payload!.Current.Cost / calls:N3}";
+        }
+    }
+
+    public string AvgCallsPerDayLabel
+    {
+        get
+        {
+            var days = Payload?.History.Daily.Count ?? 0;
+            if (days == 0) return "—";
+            var total = Payload!.History.Daily.Sum(d => d.Calls);
+            return $"{total / days:N0}";
+        }
+    }
+
+    public string BusiestDayLabel
+    {
+        get
+        {
+            var daily = Payload?.History.Daily;
+            if (daily == null || daily.Count == 0) return "—";
+            var busiest = daily.OrderByDescending(d => d.Calls).First();
+            if (!DateTime.TryParse(busiest.Date, out var dt))
+                return $"{busiest.Calls} calls";
+            return $"{dt:MMM d} ({busiest.Calls} calls)";
+        }
+    }
+
+    public string TokenRatioLabel
+    {
+        get
+        {
+            var daily = Payload?.History.Daily;
+            if (daily == null || daily.Count == 0) return "—";
+            var totalIn = daily.Sum(d => (long)d.InputTokens);
+            var totalOut = daily.Sum(d => (long)d.OutputTokens);
+            var total = totalIn + totalOut;
+            if (total == 0) return "—";
+            return $"{totalIn * 100 / total}% in · {totalOut * 100 / total}% out";
+        }
+    }
+
+    // --- Stats tab ---
+
+    public string TotalInputTokensLabel
+    {
+        get => FormatTokens(Payload?.History.Daily.Sum(d => (long)d.InputTokens) ?? 0);
+    }
+
+    public string TotalOutputTokensLabel
+    {
+        get => FormatTokens(Payload?.History.Daily.Sum(d => (long)d.OutputTokens) ?? 0);
+    }
+
+    public string AvgCostPerDayLabel
+    {
+        get
+        {
+            var days = Payload?.History.Daily.Count ?? 0;
+            if (days == 0) return "—";
+            return $"${Payload!.Current.Cost / days:N2}";
+        }
+    }
+
+    public string PeakDayCostLabel
+    {
+        get
+        {
+            var daily = Payload?.History.Daily;
+            if (daily == null || daily.Count == 0) return "—";
+            var peak = daily.OrderByDescending(d => d.Cost).First();
+            if (!DateTime.TryParse(peak.Date, out var dt))
+                return $"${peak.Cost:N2}";
+            return $"${peak.Cost:N2} on {dt:MMM d}";
+        }
+    }
+
     // --- Commands ---
 
     [RelayCommand]
@@ -188,7 +319,7 @@ public partial class MainViewModel : ViewModelBase
         IsLoading = true;
         try
         {
-            Payload = await DataClient.FetchAsync(SelectedPeriod, SelectedProvider);
+            Payload = await LocalDataClient.FetchAsync(SelectedPeriod, SelectedProvider);
             if (SelectedPeriod == "today")
                 TodayPayload = Payload;
             LastError = null;
@@ -226,6 +357,21 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ChartBars));
         OnPropertyChanged(nameof(ActivityBars));
         OnPropertyChanged(nameof(HasActivities));
+        // Forecast
+        OnPropertyChanged(nameof(ProjectedMonthlyCostLabel));
+        OnPropertyChanged(nameof(DailyBurnRateLabel));
+        OnPropertyChanged(nameof(MonthProgressLabel));
+        OnPropertyChanged(nameof(MonthProgressWidth));
+        // Pulse
+        OnPropertyChanged(nameof(CostPerCallLabel));
+        OnPropertyChanged(nameof(AvgCallsPerDayLabel));
+        OnPropertyChanged(nameof(BusiestDayLabel));
+        OnPropertyChanged(nameof(TokenRatioLabel));
+        // Stats
+        OnPropertyChanged(nameof(TotalInputTokensLabel));
+        OnPropertyChanged(nameof(TotalOutputTokensLabel));
+        OnPropertyChanged(nameof(AvgCostPerDayLabel));
+        OnPropertyChanged(nameof(PeakDayCostLabel));
     }
 
     partial void OnSelectedPeriodChanged(string value)
@@ -235,6 +381,17 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(Is30DPeriod));
         OnPropertyChanged(nameof(IsMonthPeriod));
         OnPropertyChanged(nameof(IsAllPeriod));
+        NotifyPeriodHistoryDependents();
+    }
+
+    private void NotifyPeriodHistoryDependents()
+    {
+        OnPropertyChanged(nameof(DayCount));
+        OnPropertyChanged(nameof(TotalTokensLabel));
+        OnPropertyChanged(nameof(AvgDailyTokensLabel));
+        OnPropertyChanged(nameof(PeakTokensLabel));
+        OnPropertyChanged(nameof(PeakDateLabel));
+        OnPropertyChanged(nameof(ChartBars));
     }
 
     partial void OnSelectedProviderChanged(string value)
